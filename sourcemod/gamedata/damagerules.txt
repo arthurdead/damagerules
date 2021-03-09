@@ -1,0 +1,40 @@
+"Games"
+{
+	"tf"
+	{
+		"Signatures"
+		{
+			"HandleRageGain"
+			{
+				"library" "server"
+				"linux" "@_Z14HandleRageGainP9CTFPlayerjff"
+			}
+			"CTFPlayer::OnDealtDamage"
+			{
+				"library" "server"
+				"linux" "@_ZN9CTFPlayer13OnDealtDamageEP20CBaseCombatCharacterRK15CTakeDamageInfo"
+			}
+			"CTFGameRules::ApplyOnDamageModifyRules"
+			{
+				"library" "server"
+				"linux" "@_ZN12CTFGameRules24ApplyOnDamageModifyRulesER15CTakeDamageInfoP11CBaseEntityb"
+			}
+			"CTFGameRules::ApplyOnDamageAliveModifyRules"
+			{
+				"library" "server"
+				"linux" "@_ZN12CTFGameRules29ApplyOnDamageAliveModifyRulesERK15CTakeDamageInfoP11CBaseEntityRNS_20DamageModifyExtras_tE"
+			}
+		}
+		"Offsets"
+		{
+			"CBaseEntity::OnTakeDamage"
+			{
+				"linux" "63"
+			}
+			"CBaseCombatCharacter::OnTakeDamage_Alive"
+			{
+				"linux" "276"
+			}
+		}
+	}
+}
