@@ -35,6 +35,10 @@
 			{
 				"linux" "276"
 			}
+			"CTFWeaponBase::ApplyOnHitAttributes"
+			{
+				"linux" "415"
+			}
 		}
 	}
 }

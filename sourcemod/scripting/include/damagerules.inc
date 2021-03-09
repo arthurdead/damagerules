@@ -70,6 +70,7 @@ native void HandleRageGain(int client, int iRequiredBuffFlags, float flDamage, f
 native void CallOnDealtDamage(int client, int entity, const CTakeDamageInfoVar info);
 native bool ApplyOnDamageModifyRules(CTakeDamageInfoVar info, int entity, bool bAllowDamage);
 native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras = NULL_DAMAGE_MODIFY_EXTRA);
+native void ApplyOnHitAttributes(int weapon, int victim, int attacker, const CTakeDamageInfoVar info);
 
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
@@ -87,7 +88,7 @@ stock int baseline_ontakedamage(int entity, CTakeDamageInfo info)
 		HandleRageGain(attacker, kRageBuffFlag_OnDamageDealt, damage, 6.0);
 
 		if((info.m_bitsDamageType & DMG_BURN) || (info.m_bitsDamageType & DMG_PLASMA)) {
-			HandleRageGain(attacker, kRageBuffFlag_OnBurnDamageDealt, damage, 30.f );
+			HandleRageGain(attacker, kRageBuffFlag_OnBurnDamageDealt, damage, 30.0);
 		}
 
 		int weapon = info.m_hWeapon;

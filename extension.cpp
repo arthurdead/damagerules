@@ -50,6 +50,7 @@ IServerGameEnts *gameents = nullptr;
 
 int CBaseEntityOnTakeDamage = -1;
 int CBaseCombatCharacterOnTakeDamage_Alive = -1;
+int CTFWeaponBaseApplyOnHitAttributes = -1;
 
 void *HandleRageGainPtr = nullptr;
 void *CTFPlayerOnDealtDamage = nullptr;
@@ -62,6 +63,36 @@ T void_to_func(void *ptr)
 	union { T f; void *p; };
 	p = ptr;
 	return f;
+}
+
+template <typename R, typename T, typename ...Args>
+R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
+{
+	class VEmptyClass {};
+	
+	void **this_ptr = *reinterpret_cast<void ***>(&pThisPtr);
+	void **vtable = *reinterpret_cast<void ***>(pThisPtr);
+	void *vfunc = vtable[offset];
+	
+	union
+	{
+		R (VEmptyClass::*mfpnew)(Args...);
+#ifndef PLATFORM_POSIX
+		void *addr;
+	} u;
+	u.addr = vfunc;
+#else
+		struct  
+		{
+			void *addr;
+			intptr_t adjustor;
+		} s;
+	} u;
+	u.s.addr = vfunc;
+	u.s.adjustor = 0;
+#endif
+	
+	return (R)(reinterpret_cast<VEmptyClass *>(this_ptr)->*u.mfpnew)(args...);
 }
 
 enum ECritType : int;
@@ -446,6 +477,31 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 	return 0;
 }
 
+static cell_t ApplyOnHitAttributes(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	CBaseEntity *pVictim = gamehelpers->ReferenceToEntity(params[2]);
+
+	CBaseEntity *pAttacker = gamehelpers->ReferenceToEntity(params[3]);
+	if(!pAttacker) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[3]);
+	}
+	
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	
+	CTakeDamageInfo info{};
+	AddrToDamageInfo(info, addr);
+	
+	call_vfunc<void, CBaseEntity, CBaseEntity *, CBaseEntity *, const CTakeDamageInfo &>(pEntity, CTFWeaponBaseApplyOnHitAttributes, pVictim, pAttacker, info);
+	
+	return 0;
+}
+
 static const sp_nativeinfo_t g_sNativesInfo[] =
 {
 	{"HandleRageGain", HandleRageGain},
@@ -456,6 +512,7 @@ static const sp_nativeinfo_t g_sNativesInfo[] =
 	{"CallOnTakeDamageAlive", CallOnTakeDamageAlive},
 	{"SetEntityOnTakeDamage", SetEntityOnTakeDamage},
 	{"SetEntityOnTakeDamageAlive", SetEntityOnTakeDamageAlive},
+	{"ApplyOnHitAttributes", ApplyOnHitAttributes},
 	{nullptr, nullptr},
 };
 
@@ -565,6 +622,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	
 	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamage);
 	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseCombatCharacterOnTakeDamage_Alive);
+	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
 	
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamage, 0, 0);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseCombatCharacterOnTakeDamage_Alive, 0, 0);
