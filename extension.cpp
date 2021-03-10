@@ -565,13 +565,16 @@ void Sample::OnEntityDestroyed(CBaseEntity *pEntity)
 
 void Sample::OnPluginUnloaded(IPlugin *plugin)
 {
-	for(callback_holder_map_t::iterator it{callbackmap.begin()}; it != callbackmap.end(); ++it) {
+	callback_holder_map_t::iterator it{callbackmap.begin()};
+	while(it != callbackmap.end()) {
 		if(it->second->owner == plugin->GetIdentity()) {
 			it->second->erase = false;
 			callbackmap.erase(it);
 			it->second->dtor();
-			break;
+			continue;
 		}
+		
+		++it;
 	}
 }
 
