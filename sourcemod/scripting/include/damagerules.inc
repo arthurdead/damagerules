@@ -50,7 +50,7 @@ typeset damagerules_funcs
 {
 	//OnTakeDamage
 	//OnTakeDamage_Alive
-	function int (int entity, CTakeDamageInfo info);
+	function int (int entity, CTakeDamageInfo info, any data);
 }
 
 enum struct DamageModifyExtras_t
@@ -71,14 +71,15 @@ native void CallOnDealtDamage(int client, int entity, const CTakeDamageInfoVar i
 native bool ApplyOnDamageModifyRules(CTakeDamageInfoVar info, int entity, bool bAllowDamage);
 native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras = NULL_DAMAGE_MODIFY_EXTRA);
 native void ApplyOnHitAttributes(int weapon, int victim, int attacker, const CTakeDamageInfoVar info);
+native int TakeDamage(int entity, const CTakeDamageInfoVar info);
 
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
 
-native void SetEntityOnTakeDamage(int entity, damagerules_funcs func);
-native void SetEntityOnTakeDamageAlive(int entity, damagerules_funcs func);
+native void SetEntityOnTakeDamage(int entity, damagerules_funcs func, any data = 0);
+native void SetEntityOnTakeDamageAlive(int entity, damagerules_funcs func, any data = 0);
 
-stock int baseline_ontakedamage(int entity, CTakeDamageInfo info)
+stock int baseline_ontakedamage(int entity, CTakeDamageInfo info, any data)
 {
 	ApplyOnDamageModifyRules(info, entity, true);
 
@@ -100,7 +101,7 @@ stock int baseline_ontakedamage(int entity, CTakeDamageInfo info)
 	return CallOnTakeDamage(entity, info);
 }
 
-stock int baseline_ontakedamagealive(int entity, CTakeDamageInfo info)
+stock int baseline_ontakedamagealive(int entity, CTakeDamageInfo info, any data)
 {
 	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity);
 

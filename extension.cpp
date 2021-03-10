@@ -56,6 +56,7 @@ void *HandleRageGainPtr = nullptr;
 void *CTFPlayerOnDealtDamage = nullptr;
 void *CTFGameRulesApplyOnDamageModifyRules = nullptr;
 void *CTFGameRulesApplyOnDamageAliveModifyRules = nullptr;
+void *CBaseEntityTakeDamage = nullptr;
 
 template <typename T>
 T void_to_func(void *ptr)
@@ -100,26 +101,26 @@ enum ECritType : int;
 class CTakeDamageInfo
 {
 public:
-	Vector			m_vecDamageForce;
-	Vector			m_vecDamagePosition;
-	Vector			m_vecReportedPosition;	// Position players are told damage is coming from
-	CBaseHandle		m_hInflictor;
-	CBaseHandle		m_hAttacker;
-	CBaseHandle		m_hWeapon;
-	float			m_flDamage;
-	float			m_flMaxDamage;
-	float			m_flBaseDamage;			// The damage amount before skill leve adjustments are made. Used to get uniform damage forces.
-	int				m_bitsDamageType;
-	int				m_iDamageCustom;
-	int				m_iDamageStats;
-	int				m_iAmmoType;			// AmmoType of the weapon used to cause this damage, if any
-	int				m_iDamagedOtherPlayers;
-	int				m_iPlayerPenetrationCount;
-	float			m_flDamageBonus;		// Anything that increases damage (crit) - store the delta
-	CBaseHandle		m_hDamageBonusProvider;	// Who gave us the ability to do extra damage?
-	bool			m_bForceFriendlyFire;	// Ideally this would be a dmg type, but we can't add more
-	float			m_flDamageForForce;
-	ECritType		m_eCritType;
+	Vector			m_vecDamageForce{0.0f, 0.0f, 0.0f};
+	Vector			m_vecDamagePosition{0.0f, 0.0f, 0.0f};
+	Vector			m_vecReportedPosition{0.0f, 0.0f, 0.0f};	// Position players are told damage is coming from
+	CBaseHandle		m_hInflictor{};
+	CBaseHandle		m_hAttacker{};
+	CBaseHandle		m_hWeapon{};
+	float			m_flDamage{0.0f};
+	float			m_flMaxDamage{0.0f};
+	float			m_flBaseDamage{0.0f};			// The damage amount before skill leve adjustments are made. Used to get uniform damage forces.
+	int				m_bitsDamageType{0};
+	int				m_iDamageCustom{0};
+	int				m_iDamageStats{0};
+	int				m_iAmmoType{0};			// AmmoType of the weapon used to cause this damage, if any
+	int				m_iDamagedOtherPlayers{0};
+	int				m_iPlayerPenetrationCount{0};
+	float			m_flDamageBonus{0.0f};		// Anything that increases damage (crit) - store the delta
+	CBaseHandle		m_hDamageBonusProvider{};	// Who gave us the ability to do extra damage?
+	bool			m_bForceFriendlyFire{false};	// Ideally this would be a dmg type, but we can't add more
+	float			m_flDamageForForce{0.0f};
+	ECritType		m_eCritType{(ECritType)0};
 };
 
 static cell_t HandleRageGain(IPluginContext *pContext, const cell_t *params)
@@ -135,28 +136,46 @@ static cell_t HandleRageGain(IPluginContext *pContext, const cell_t *params)
 
 struct DamageModifyExtras_t
 {
-	bool bIgniting;
-	bool bSelfBlastDmg;
-	bool bSendPreFeignDamage;
-	bool bPlayDamageReductionSound;
+	bool bIgniting{false};
+	bool bSelfBlastDmg{false};
+	bool bSendPreFeignDamage{false};
+	bool bPlayDamageReductionSound{false};
 };
 
 #define DAMAGEINFO_STRUCT_SIZE 26
 
+void SetHandleEntity(CBaseHandle &hndl, edict_t *pEdict)
+{
+	if(!pEdict) {
+		hndl.Set(nullptr);
+	} else {
+		gamehelpers->SetHandleEntity(hndl, pEdict);
+	}
+}
+
+int IndexOfEdict(edict_t *pEdict)
+{
+	if(!pEdict) {
+		return -1;
+	} else {
+		return gamehelpers->IndexOfEdict(pEdict);
+	}
+}
+
 void AddrToDamageInfo(CTakeDamageInfo &info, cell_t *addr)
 {
-	info.m_vecDamageForce.x = addr[0];
-	info.m_vecDamageForce.y = addr[1];
-	info.m_vecDamageForce.z = addr[2];
-	info.m_vecDamagePosition.x = addr[3];
-	info.m_vecDamagePosition.y = addr[4];
-	info.m_vecDamagePosition.z = addr[5];
-	info.m_vecReportedPosition.x = addr[6];
-	info.m_vecReportedPosition.y = addr[7];
-	info.m_vecReportedPosition.z = addr[8];
-	gamehelpers->SetHandleEntity(info.m_hInflictor, gamehelpers->EdictOfIndex(addr[9]));
-	gamehelpers->SetHandleEntity(info.m_hAttacker, gamehelpers->EdictOfIndex(addr[10]));
-	gamehelpers->SetHandleEntity(info.m_hWeapon, gamehelpers->EdictOfIndex(addr[11]));
+	info.m_vecDamageForce.x = sp_ctof(addr[0]);
+	info.m_vecDamageForce.y = sp_ctof(addr[1]);
+	info.m_vecDamageForce.z = sp_ctof(addr[2]);
+	info.m_vecDamagePosition.x = sp_ctof(addr[3]);
+	info.m_vecDamagePosition.y = sp_ctof(addr[4]);
+	info.m_vecDamagePosition.z = sp_ctof(addr[5]);
+	info.m_vecReportedPosition.x = sp_ctof(addr[6]);
+	info.m_vecReportedPosition.y = sp_ctof(addr[7]);
+	info.m_vecReportedPosition.z = sp_ctof(addr[8]);
+	SetHandleEntity(info.m_hInflictor, gamehelpers->EdictOfIndex(addr[9]));
+	SetHandleEntity(info.m_hAttacker, gamehelpers->EdictOfIndex(addr[10]));
+	SetHandleEntity(info.m_hWeapon, gamehelpers->EdictOfIndex(addr[11]));
 	info.m_flDamage = sp_ctof(addr[12]);
 	info.m_flMaxDamage = sp_ctof(addr[13]);
 	info.m_flBaseDamage = sp_ctof(addr[14]);
@@ -167,7 +186,7 @@ void AddrToDamageInfo(CTakeDamageInfo &info, cell_t *addr)
 	info.m_iDamagedOtherPlayers = addr[19];
 	info.m_iPlayerPenetrationCount = addr[20];
 	info.m_flDamageBonus = sp_ctof(addr[21]);
-	gamehelpers->SetHandleEntity(info.m_hDamageBonusProvider, gamehelpers->EdictOfIndex(addr[22]));
+	SetHandleEntity(info.m_hDamageBonusProvider, gamehelpers->EdictOfIndex(addr[22]));
 	info.m_bForceFriendlyFire = addr[23];
 	info.m_flDamageForForce = sp_ctof(addr[24]);
 	info.m_eCritType = (ECritType)addr[25];
@@ -175,18 +194,18 @@ void AddrToDamageInfo(CTakeDamageInfo &info, cell_t *addr)
 
 void DamageInfoToAddr(CTakeDamageInfo &info, cell_t *addr)
 {
-	addr[0] = info.m_vecDamageForce.x;
-	addr[1] = info.m_vecDamageForce.y;
-	addr[2] = info.m_vecDamageForce.z;
-	addr[3] = info.m_vecDamagePosition.x;
-	addr[4] = info.m_vecDamagePosition.y;
-	addr[5] = info.m_vecDamagePosition.z;
-	addr[6] = info.m_vecReportedPosition.x;
-	addr[7] = info.m_vecReportedPosition.y;
-	addr[8] = info.m_vecReportedPosition.z;
-	addr[9] = gamehelpers->IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hInflictor));
-	addr[10] = gamehelpers->IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hAttacker));
-	addr[11] = gamehelpers->IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hWeapon));
+	addr[0] = sp_ftoc(info.m_vecDamageForce.x);
+	addr[1] = sp_ftoc(info.m_vecDamageForce.y);
+	addr[2] = sp_ftoc(info.m_vecDamageForce.z);
+	addr[3] = sp_ftoc(info.m_vecDamagePosition.x);
+	addr[4] = sp_ftoc(info.m_vecDamagePosition.y);
+	addr[5] = sp_ftoc(info.m_vecDamagePosition.z);
+	addr[6] = sp_ftoc(info.m_vecReportedPosition.x);
+	addr[7] = sp_ftoc(info.m_vecReportedPosition.y);
+	addr[8] = sp_ftoc(info.m_vecReportedPosition.z);
+	addr[9] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hInflictor));
+	addr[10] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hAttacker));
+	addr[11] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hWeapon));
 	addr[12] = sp_ftoc(info.m_flDamage);
 	addr[13] = sp_ftoc(info.m_flMaxDamage);
 	addr[14] = sp_ftoc(info.m_flBaseDamage);
@@ -197,7 +216,7 @@ void DamageInfoToAddr(CTakeDamageInfo &info, cell_t *addr)
 	addr[19] = info.m_iDamagedOtherPlayers;
 	addr[20] = info.m_iPlayerPenetrationCount;
 	addr[21] = sp_ftoc(info.m_flDamageBonus);
-	addr[22] = gamehelpers->IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hDamageBonusProvider));
+	addr[22] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hDamageBonusProvider));
 	addr[23] = info.m_bForceFriendlyFire;
 	addr[24] = sp_ftoc(info.m_flDamageForForce);
 	addr[25] = info.m_eCritType;
@@ -247,7 +266,7 @@ static cell_t ApplyOnDamageModifyRules(IPluginContext *pContext, const cell_t *p
 	CTakeDamageInfo info{};
 	AddrToDamageInfo(info, addr);
 	
-	bool ret = (g_pGameRules->*void_to_func<bool(CTFGameRules::*)(CTakeDamageInfo &info, CBaseEntity *, bool)>(CTFGameRulesApplyOnDamageModifyRules))(info, pVictim, params[3]);
+	bool ret = (g_pGameRules->*void_to_func<bool(CTFGameRules::*)(CTakeDamageInfo &, CBaseEntity *, bool)>(CTFGameRulesApplyOnDamageModifyRules))(info, pVictim, params[3]);
 	
 	DamageInfoToAddr(info, addr);
 	
@@ -334,7 +353,9 @@ static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *para
 struct callback_holder_t
 {
 	IPluginFunction *callback = nullptr;
+	cell_t data = 0;
 	IPluginFunction *alive_callback = nullptr;
+	cell_t alive_data = 0;
 	CBaseEntity *pEntity_ = nullptr;
 	IdentityToken_t *owner = nullptr;
 	bool erase = true;
@@ -342,18 +363,20 @@ struct callback_holder_t
 	callback_holder_t(CBaseEntity *pEntity, IdentityToken_t *owner_);
 	~callback_holder_t();
 	
-	void add_alive_hook(CBaseEntity *pEntity, IPluginFunction *callback_)
+	void add_alive_hook(CBaseEntity *pEntity, IPluginFunction *callback_, cell_t alive_data_)
 	{
 		bool had = alive_callback != nullptr;
+		alive_data = alive_data_;
 		alive_callback = callback_;
 		if(!had) {
 			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
 		}
 	}
 	
-	void add_hook(CBaseEntity *pEntity, IPluginFunction *callback_)
+	void add_hook(CBaseEntity *pEntity, IPluginFunction *callback_, cell_t data_)
 	{
 		bool had = callback != nullptr;
+		data = data_;
 		callback = callback_;
 		if(!had) {
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
@@ -362,13 +385,13 @@ struct callback_holder_t
 
 	void dtor()
 	{
-		SH_REMOVE_MANUALHOOK(GenericDtor, this, SH_MEMBER(this, &callback_holder_t::dtor), false);
+		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::dtor), false);
 		
 		if(callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamage, this, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity_, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
 		}
 		if(alive_callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, this, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity_, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
 		}
 		
 		delete this;
@@ -385,12 +408,13 @@ struct callback_holder_t
 		
 		callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
 		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE, SM_PARAM_COPYBACK);
+		callback->PushCell(data);
 		cell_t res = 0;
 		callback->Execute(&res);
 		
 		AddrToDamageInfo(copy, addr);
 		
-		RETURN_META_VALUE_MNEWPARAMS(MRES_SUPERCEDE, res, OnTakeDamageAlive, (copy));
+		RETURN_META_VALUE(MRES_SUPERCEDE, res);
 	}
 
 	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
@@ -404,6 +428,7 @@ struct callback_holder_t
 		
 		alive_callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
 		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE, SM_PARAM_COPYBACK);
+		alive_callback->PushCell(alive_data);
 		cell_t res = 0;
 		alive_callback->Execute(&res);
 		
@@ -450,7 +475,7 @@ static cell_t SetEntityOnTakeDamage(IPluginContext *pContext, const cell_t *para
 	}
 	
 	IPluginFunction *callback = pContext->GetFunctionById(params[2]);
-	holder->add_hook(pEntity, callback);
+	holder->add_hook(pEntity, callback, params[3]);
 	
 	return 0;
 }
@@ -472,7 +497,7 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 	}
 	
 	IPluginFunction *callback = pContext->GetFunctionById(params[2]);
-	holder->add_alive_hook(pEntity, callback);
+	holder->add_alive_hook(pEntity, callback, params[3]);
 	
 	return 0;
 }
@@ -492,7 +517,7 @@ static cell_t ApplyOnHitAttributes(IPluginContext *pContext, const cell_t *param
 	}
 	
 	cell_t *addr = nullptr;
-	pContext->LocalToPhysAddr(params[2], &addr);
+	pContext->LocalToPhysAddr(params[4], &addr);
 	
 	CTakeDamageInfo info{};
 	AddrToDamageInfo(info, addr);
@@ -500,6 +525,22 @@ static cell_t ApplyOnHitAttributes(IPluginContext *pContext, const cell_t *param
 	call_vfunc<void, CBaseEntity, CBaseEntity *, CBaseEntity *, const CTakeDamageInfo &>(pEntity, CTFWeaponBaseApplyOnHitAttributes, pVictim, pAttacker, info);
 	
 	return 0;
+}
+
+static cell_t TakeDamage(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	
+	CTakeDamageInfo info{};
+	AddrToDamageInfo(info, addr);
+	
+	return (pEntity->*void_to_func<int(CBaseEntity::*)(const CTakeDamageInfo &)>(CBaseEntityTakeDamage))(info);
 }
 
 static const sp_nativeinfo_t g_sNativesInfo[] =
@@ -513,6 +554,7 @@ static const sp_nativeinfo_t g_sNativesInfo[] =
 	{"SetEntityOnTakeDamage", SetEntityOnTakeDamage},
 	{"SetEntityOnTakeDamageAlive", SetEntityOnTakeDamageAlive},
 	{"ApplyOnHitAttributes", ApplyOnHitAttributes},
+	{"TakeDamage", TakeDamage},
 	{nullptr, nullptr},
 };
 
@@ -526,6 +568,7 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 	for(callback_holder_map_t::iterator it{callbackmap.begin()}; it != callbackmap.end(); ++it) {
 		if(it->second->owner == plugin->GetIdentity()) {
 			it->second->erase = false;
+			callbackmap.erase(it);
 			it->second->dtor();
 			break;
 		}
@@ -631,6 +674,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetMemSig("CTFPlayer::OnDealtDamage", &CTFPlayerOnDealtDamage);
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageModifyRules", &CTFGameRulesApplyOnDamageModifyRules);
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
+	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
 	
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 
