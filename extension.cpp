@@ -67,13 +67,11 @@ T void_to_func(void *ptr)
 }
 
 template <typename R, typename T, typename ...Args>
-R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
+R call_mfunc(T *pThisPtr, void *offset, Args ...args)
 {
 	class VEmptyClass {};
 	
 	void **this_ptr = *reinterpret_cast<void ***>(&pThisPtr);
-	void **vtable = *reinterpret_cast<void ***>(pThisPtr);
-	void *vfunc = vtable[offset];
 	
 	union
 	{
@@ -81,7 +79,7 @@ R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
 #ifndef PLATFORM_POSIX
 		void *addr;
 	} u;
-	u.addr = vfunc;
+	u.addr = offset;
 #else
 		struct  
 		{
@@ -89,11 +87,20 @@ R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
 			intptr_t adjustor;
 		} s;
 	} u;
-	u.s.addr = vfunc;
+	u.s.addr = offset;
 	u.s.adjustor = 0;
 #endif
 	
 	return (R)(reinterpret_cast<VEmptyClass *>(this_ptr)->*u.mfpnew)(args...);
+}
+
+template <typename R, typename T, typename ...Args>
+R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
+{
+	void **vtable = *reinterpret_cast<void ***>(pThisPtr);
+	void *vfunc = vtable[offset];
+	
+	return call_mfunc<R, T, Args...>(pThisPtr, vfunc, args...);
 }
 
 enum ECritType : int;
@@ -240,7 +247,7 @@ static cell_t CallOnDealtDamage(IPluginContext *pContext, const cell_t *params)
 	CTakeDamageInfo info{};
 	AddrToDamageInfo(info, addr);
 	
-	(pEntity->*void_to_func<void(CBaseEntity::*)(CBaseEntity *, const CTakeDamageInfo &)>(CTFPlayerOnDealtDamage))(pVictim, info);
+	call_mfunc<void, CBaseEntity, CBaseEntity *, const CTakeDamageInfo &>(pEntity, CTFPlayerOnDealtDamage, pVictim, info);
 	return 0;
 }
 
@@ -266,7 +273,7 @@ static cell_t ApplyOnDamageModifyRules(IPluginContext *pContext, const cell_t *p
 	CTakeDamageInfo info{};
 	AddrToDamageInfo(info, addr);
 	
-	bool ret = (g_pGameRules->*void_to_func<bool(CTFGameRules::*)(CTakeDamageInfo &, CBaseEntity *, bool)>(CTFGameRulesApplyOnDamageModifyRules))(info, pVictim, params[3]);
+	bool ret = call_mfunc<bool, CTFGameRules, CTakeDamageInfo &, CBaseEntity *, bool>(g_pGameRules, CTFGameRulesApplyOnDamageModifyRules, info, pVictim, params[3]);
 	
 	DamageInfoToAddr(info, addr);
 	
@@ -291,7 +298,7 @@ static cell_t ApplyOnDamageAliveModifyRules(IPluginContext *pContext, const cell
 	AddrToDamageInfo(info, addr);
 	
 	DamageModifyExtras_t extra{};
-	float ret = (g_pGameRules->*void_to_func<float(CTFGameRules::*)(const CTakeDamageInfo &info, CBaseEntity *, DamageModifyExtras_t &)>(CTFGameRulesApplyOnDamageAliveModifyRules))(info, pVictim, extra);
+	float ret = call_mfunc<float, CTFGameRules, const CTakeDamageInfo &, CBaseEntity *, DamageModifyExtras_t &>(g_pGameRules, CTFGameRulesApplyOnDamageAliveModifyRules, info, pVictim, extra);
 	
 	pContext->LocalToPhysAddr(params[3], &addr);
 	
@@ -540,7 +547,7 @@ static cell_t TakeDamage(IPluginContext *pContext, const cell_t *params)
 	CTakeDamageInfo info{};
 	AddrToDamageInfo(info, addr);
 	
-	return (pEntity->*void_to_func<int(CBaseEntity::*)(const CTakeDamageInfo &)>(CBaseEntityTakeDamage))(info);
+	return call_mfunc<int, CBaseEntity, const CTakeDamageInfo &>(pEntity, CBaseEntityTakeDamage, info);
 }
 
 static const sp_nativeinfo_t g_sNativesInfo[] =
