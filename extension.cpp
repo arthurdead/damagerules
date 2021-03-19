@@ -48,8 +48,6 @@ ISDKTools *g_pSDKTools = nullptr;
 ISDKHooks *g_pSDKHooks = nullptr;
 IServerGameEnts *gameents = nullptr;
 
-int CBaseEntityOnTakeDamage = -1;
-int CBaseCombatCharacterOnTakeDamage_Alive = -1;
 int CTFWeaponBaseApplyOnHitAttributes = -1;
 
 void *HandleRageGainPtr = nullptr;
@@ -406,40 +404,32 @@ struct callback_holder_t
 	
 	int HookOnTakeDamage(const CTakeDamageInfo &info)
 	{
-		CTakeDamageInfo copy = info;
-		
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
-		DamageInfoToAddr(copy, addr);
+		DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE, SM_PARAM_COPYBACK);
+		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE);
 		callback->PushCell(data);
 		cell_t res = 0;
 		callback->Execute(&res);
-		
-		AddrToDamageInfo(copy, addr);
 		
 		RETURN_META_VALUE(MRES_SUPERCEDE, res);
 	}
 
 	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
 	{
-		CTakeDamageInfo copy = info;
-		
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
-		DamageInfoToAddr(copy, addr);
+		DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		alive_callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE, SM_PARAM_COPYBACK);
+		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE);
 		alive_callback->PushCell(alive_data);
 		cell_t res = 0;
 		alive_callback->Execute(&res);
-		
-		AddrToDamageInfo(copy, addr);
 		
 		RETURN_META_VALUE(MRES_SUPERCEDE, res);
 	}
@@ -449,13 +439,11 @@ using callback_holder_map_t = std::unordered_map<CBaseEntity *, callback_holder_
 callback_holder_map_t callbackmap{};
 
 callback_holder_t::callback_holder_t(CBaseEntity *pEntity, IdentityToken_t *owner_)
+	: pEntity_{pEntity}, owner{owner_}
 {
 	SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::dtor), false);
 	
 	callbackmap[pEntity] = this;
-	
-	owner = owner_;
-	pEntity_ = pEntity;
 }
 
 callback_holder_t::~callback_holder_t()
@@ -673,12 +661,14 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	
 	gameconfs->LoadGameConfigFile("damagerules", &g_pGameConf, nullptr, 0);
 	
-	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamage);
-	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseCombatCharacterOnTakeDamage_Alive);
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
 	
-	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamage, 0, 0);
-	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseCombatCharacterOnTakeDamage_Alive, 0, 0);
+	int offset = -1;
+	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &offset);
+	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, offset, 0, 0);
+	
+	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &offset);
+	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, offset, 0, 0);
 	
 	g_pGameConf->GetMemSig("HandleRageGain", &HandleRageGainPtr);
 	g_pGameConf->GetMemSig("CTFPlayer::OnDealtDamage", &CTFPlayerOnDealtDamage);
