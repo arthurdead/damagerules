@@ -387,10 +387,10 @@ struct callback_holder_t
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
 		}
 	}
-
+	
 	void dtor()
 	{
-		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::dtor), false);
+		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
 		
 		if(callback) {
 			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity_, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
@@ -400,6 +400,14 @@ struct callback_holder_t
 		}
 		
 		delete this;
+	}
+
+	void HookEntityDtor()
+	{
+		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+		pEntity_ = pEntity;
+		dtor();
+		RETURN_META(MRES_IGNORED);
 	}
 	
 	int HookOnTakeDamage(const CTakeDamageInfo &info)
@@ -441,9 +449,9 @@ callback_holder_map_t callbackmap{};
 callback_holder_t::callback_holder_t(CBaseEntity *pEntity, IdentityToken_t *owner_)
 	: pEntity_{pEntity}, owner{owner_}
 {
-	SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::dtor), false);
+	SH_ADD_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
 	
-	callbackmap[pEntity] = this;
+	callbackmap[pEntity_] = this;
 }
 
 callback_holder_t::~callback_holder_t()
