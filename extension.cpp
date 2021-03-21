@@ -318,7 +318,7 @@ static cell_t ApplyOnDamageAliveModifyRules(IPluginContext *pContext, const cell
 	return sp_ftoc(ret);
 }
 
-SH_DECL_MANUALHOOK0_void(GenericDtor, 0, 0, 0)
+SH_DECL_MANUALHOOK0_void(GenericDtor, 1, 0, 0)
 
 SH_DECL_MANUALHOOK1(OnTakeDamage, 0, 0, 0, int, const CTakeDamageInfo &)
 SH_DECL_MANUALHOOK1(OnTakeDamageAlive, 0, 0, 0, int, const CTakeDamageInfo &)
