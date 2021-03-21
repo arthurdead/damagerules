@@ -167,6 +167,11 @@ int IndexOfEdict(edict_t *pEdict)
 	}
 }
 
+edict_t *GetHandleEntity(const CBaseHandle &hndl)
+{
+	return gamehelpers->GetHandleEntity(const_cast<CBaseHandle &>(hndl));
+}
+
 void AddrToDamageInfo(CTakeDamageInfo &info, cell_t *addr)
 {
 	info.m_vecDamageForce.x = sp_ctof(addr[0]);
@@ -197,7 +202,7 @@ void AddrToDamageInfo(CTakeDamageInfo &info, cell_t *addr)
 	info.m_eCritType = (ECritType)addr[25];
 }
 
-void DamageInfoToAddr(CTakeDamageInfo &info, cell_t *addr)
+void DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr)
 {
 	addr[0] = sp_ftoc(info.m_vecDamageForce.x);
 	addr[1] = sp_ftoc(info.m_vecDamageForce.y);
@@ -208,9 +213,9 @@ void DamageInfoToAddr(CTakeDamageInfo &info, cell_t *addr)
 	addr[6] = sp_ftoc(info.m_vecReportedPosition.x);
 	addr[7] = sp_ftoc(info.m_vecReportedPosition.y);
 	addr[8] = sp_ftoc(info.m_vecReportedPosition.z);
-	addr[9] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hInflictor));
-	addr[10] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hAttacker));
-	addr[11] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hWeapon));
+	addr[9] = IndexOfEdict(GetHandleEntity(info.m_hInflictor));
+	addr[10] = IndexOfEdict(GetHandleEntity(info.m_hAttacker));
+	addr[11] = IndexOfEdict(GetHandleEntity(info.m_hWeapon));
 	addr[12] = sp_ftoc(info.m_flDamage);
 	addr[13] = sp_ftoc(info.m_flMaxDamage);
 	addr[14] = sp_ftoc(info.m_flBaseDamage);
@@ -221,7 +226,7 @@ void DamageInfoToAddr(CTakeDamageInfo &info, cell_t *addr)
 	addr[19] = info.m_iDamagedOtherPlayers;
 	addr[20] = info.m_iPlayerPenetrationCount;
 	addr[21] = sp_ftoc(info.m_flDamageBonus);
-	addr[22] = IndexOfEdict(gamehelpers->GetHandleEntity(info.m_hDamageBonusProvider));
+	addr[22] = IndexOfEdict(GetHandleEntity(info.m_hDamageBonusProvider));
 	addr[23] = info.m_bForceFriendlyFire;
 	addr[24] = sp_ftoc(info.m_flDamageForForce);
 	addr[25] = info.m_eCritType;
@@ -388,15 +393,15 @@ struct callback_holder_t
 		}
 	}
 	
-	void dtor()
+	void dtor(CBaseEntity *pEntity)
 	{
-		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
+		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
 		
 		if(callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity_, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
 		}
 		if(alive_callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity_, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
 		}
 		
 		delete this;
@@ -405,8 +410,7 @@ struct callback_holder_t
 	void HookEntityDtor()
 	{
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
-		pEntity_ = pEntity;
-		dtor();
+		dtor(pEntity);
 		RETURN_META(MRES_IGNORED);
 	}
 	
@@ -573,7 +577,7 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 		if(it->second->owner == plugin->GetIdentity()) {
 			it->second->erase = false;
 			callbackmap.erase(it);
-			it->second->dtor();
+			it->second->dtor(it->second->pEntity_);
 			continue;
 		}
 		
