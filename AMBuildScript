@@ -19,7 +19,7 @@ WinLinux = ['windows', 'linux']
 WinLinuxMac = ['windows', 'linux', 'mac']
 
 PossibleSDKs = {
-  'tf2-sdk2013':  SDK('HL2SDK2013', '2.tf2', '11', 'TF2', WinLinuxMac, 'sdk2013'),
+  'tf2':  SDK('HL2SDKTF2', '2.tf2', '11', 'TF2', WinLinuxMac, 'tf2'),
 }
 
 def ResolveEnvPath(env, folder):
@@ -304,7 +304,6 @@ class ExtensionConfig(object):
     else:
       paths.append(['public', 'game', 'server'])
       paths.append(['public', 'toolframework'])
-      paths.append(['game', 'shared'])
       paths.append(['common'])
 
     compiler.defines += ['SOURCE_ENGINE=' + sdk.code]
