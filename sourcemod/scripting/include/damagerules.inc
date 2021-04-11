@@ -3,12 +3,14 @@
 #endif
 #define damagerules_included
 
+#if defined GAME_TF2
 enum ECritType
 {
 	CRIT_NONE = 0,
 	CRIT_MINI,
 	CRIT_FULL,
 }
+#endif
 
 enum struct CTakeDamageInfo
 {
@@ -25,6 +27,7 @@ enum struct CTakeDamageInfo
 	int m_iDamageCustom;
 	int m_iDamageStats;
 	int m_iAmmoType;			// AmmoType of the weapon used to cause this damage, if any
+#if defined GAME_TF2
 	int m_iDamagedOtherPlayers;
 	int m_iPlayerPenetrationCount;
 	float m_flDamageBonus;		// Anything that increases damage (crit) - store the delta
@@ -32,8 +35,12 @@ enum struct CTakeDamageInfo
 	bool m_bForceFriendlyFire;	// Ideally this would be a dmg type, but we can't add more
 	float m_flDamageForForce;
 	ECritType m_eCritType;
+#elseif defined GAME_L4D2
+	float m_flRadius;
+#endif
 }
 
+#if defined GAME_TF2
 enum
 {
 	kRageBuffFlag_None = 0x00,
@@ -43,6 +50,7 @@ enum
 	kRageBuffFlag_OnBurnDamageDealt = 0x08,
 	kRageBuffFlag_OnHeal = 0x10
 };
+#endif
 
 #define CTakeDamageInfoVar any[]
 
@@ -53,6 +61,7 @@ typeset damagerules_funcs
 	function int (int entity, CTakeDamageInfo info, any data);
 }
 
+#if defined GAME_TF2
 enum struct DamageModifyExtras_t
 {
 	bool bIgniting;
@@ -71,6 +80,8 @@ native void CallOnDealtDamage(int client, int entity, const CTakeDamageInfoVar i
 native bool ApplyOnDamageModifyRules(CTakeDamageInfoVar info, int entity, bool bAllowDamage);
 native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras = NULL_DAMAGE_MODIFY_EXTRA);
 native void ApplyOnHitAttributes(int weapon, int victim, int attacker, const CTakeDamageInfoVar info);
+#endif
+
 native int TakeDamage(int entity, const CTakeDamageInfoVar info);
 
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
@@ -81,8 +92,9 @@ native void SetEntityOnTakeDamageAlive(int entity, damagerules_funcs func, any d
 
 stock int baseline_ontakedamage(int entity, CTakeDamageInfo info, any data)
 {
+#if defined GAME_TF2
 	ApplyOnDamageModifyRules(info, entity, true);
-
+	
 	int attacker = info.m_hAttacker;
 	float damage = info.m_flDamage;
 	if(damage > 0.0 && attacker != entity) {
@@ -97,20 +109,25 @@ stock int baseline_ontakedamage(int entity, CTakeDamageInfo info, any data)
 			ApplyOnHitAttributes(weapon, entity, attacker, info);
 		}
 	}
-
+#endif
+	
 	return CallOnTakeDamage(entity, info);
 }
 
 stock int baseline_ontakedamagealive(int entity, CTakeDamageInfo info, any data)
 {
+#if defined GAME_TF2
 	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity);
+#endif
 
 	int ret = CallOnTakeDamageAlive(entity, info);
 
+#if defined GAME_TF2
 	int attacker = info.m_hAttacker;
 	if(attacker != -1) {
 		CallOnDealtDamage(attacker, entity, info);
 	}
+#endif
 
 	return ret;
 }

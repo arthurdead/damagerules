@@ -1,5 +1,36 @@
 "Games"
 {
+	"#default"
+	{
+		"#supported"
+		{
+			"game"	"tf"
+			"game"	"left4dead2"
+		}
+
+		"Signatures"
+		{
+			"CBaseEntity::TakeDamage"
+			{
+				"library" "server"
+				"linux" "@_ZN11CBaseEntity10TakeDamageERK15CTakeDamageInfo"
+			}
+		}
+	}
+	"left4dead2"
+	{
+		"Offsets"
+		{
+			"CBaseEntity::OnTakeDamage"
+			{
+				"linux" "73"
+			}
+			"CBaseCombatCharacter::OnTakeDamage_Alive"
+			{
+				"linux" "293"
+			}
+		}
+	}
 	"tf"
 	{
 		"Signatures"
@@ -23,11 +54,6 @@
 			{
 				"library" "server"
 				"linux" "@_ZN12CTFGameRules29ApplyOnDamageAliveModifyRulesERK15CTakeDamageInfoP11CBaseEntityRNS_20DamageModifyExtras_tE"
-			}
-			"CBaseEntity::TakeDamage"
-			{
-				"library" "server"
-				"linux" "@_ZN11CBaseEntity10TakeDamageERK15CTakeDamageInfo"
 			}
 		}
 		"Offsets"

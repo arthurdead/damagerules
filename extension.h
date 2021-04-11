@@ -42,15 +42,21 @@
 #include <ISDKTools.h>
 #include <ISDKHooks.h>
 
+#include <public/IDamageRules.h>
+
 /**
  * @brief Sample implementation of the SDK Extension.
  * Note: Uncomment one of the pre-defined virtual functions in order to use it.
  */
-class Sample : public SDKExtension, public ISMEntityListener, public IPluginsListener
+class Sample : public SDKExtension, public ISMEntityListener, public IPluginsListener, public IDamageRules
 {
 public:
 	void OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax);
 	void OnCoreMapEnd();
+	
+	virtual void AddrToDamageInfo(const cell_t *addr, CTakeDamageInfo &info);
+	virtual void DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr);
+	virtual size_t SPDamageInfoStructSize();
 	
 	virtual void OnEntityDestroyed(CBaseEntity *pEntity);
 	
