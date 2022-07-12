@@ -64,11 +64,11 @@
 			}
 			"CBaseCombatCharacter::OnTakeDamage_Alive"
 			{
-				"linux" "277"
+				"linux" "280"
 			}
 			"CTFWeaponBase::ApplyOnHitAttributes"
 			{
-				"linux" "416"
+				"linux" "419"
 			}
 		}
 	}
