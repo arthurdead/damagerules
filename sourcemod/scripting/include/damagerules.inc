@@ -3,6 +3,12 @@
 #endif
 #define damagerules_included
 
+#if !defined GAME_TF2 && !defined GAME_L4D2
+	#error please define either GAME_TF2 or GAME_L4D2
+#endif
+
+#include <sdkhooks>
+
 #if defined GAME_TF2
 enum ECritType
 {
@@ -72,13 +78,13 @@ enum struct DamageModifyExtras_t
 
 #define DamageModifyExtras_tVar any[]
 
-public const DamageModifyExtras_t NULL_DAMAGE_MODIFY_EXTRA;
+public DamageModifyExtras_t NULL_DAMAGE_MODIFY_EXTRA;
 
 native void HandleRageGain(int client, int iRequiredBuffFlags, float flDamage, float fInverseRageGainScale);
 
 native void CallOnDealtDamage(int client, int entity, const CTakeDamageInfoVar info);
 native bool ApplyOnDamageModifyRules(CTakeDamageInfoVar info, int entity, bool bAllowDamage);
-native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras = NULL_DAMAGE_MODIFY_EXTRA);
+native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras);
 native void ApplyOnHitAttributes(int weapon, int victim, int attacker, const CTakeDamageInfoVar info);
 #endif
 
@@ -117,7 +123,7 @@ stock int baseline_ontakedamage(int entity, CTakeDamageInfo info, any data)
 stock int baseline_ontakedamagealive(int entity, CTakeDamageInfo info, any data)
 {
 #if defined GAME_TF2
-	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity);
+	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity, NULL_DAMAGE_MODIFY_EXTRA);
 #endif
 
 	int ret = CallOnTakeDamageAlive(entity, info);
