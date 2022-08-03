@@ -384,56 +384,28 @@ struct callback_holder_t
 	cell_t data = 0;
 	IPluginFunction *alive_callback = nullptr;
 	cell_t alive_data = 0;
-	CBaseEntity *pEntity_ = nullptr;
 	IdentityToken_t *owner = nullptr;
 	bool erase = true;
+	int ref = -1;
 	
-	callback_holder_t(CBaseEntity *pEntity, IdentityToken_t *owner_);
+	callback_holder_t(CBaseEntity *pEntity, int ref_, IdentityToken_t *owner_);
 	~callback_holder_t();
-	
-	void add_alive_hook(CBaseEntity *pEntity, IPluginFunction *callback_, cell_t alive_data_)
-	{
-		bool had = alive_callback != nullptr;
-		alive_data = alive_data_;
-		alive_callback = callback_;
-		if(!had) {
-			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
-		}
-	}
-	
-	void add_hook(CBaseEntity *pEntity, IPluginFunction *callback_, cell_t data_)
-	{
-		bool had = callback != nullptr;
-		data = data_;
-		callback = callback_;
-		if(!had) {
-			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
-		}
-	}
 	
 	void dtor(CBaseEntity *pEntity)
 	{
 		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
-		
-		if(callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
-		}
-		if(alive_callback) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
-		}
-		
-		delete this;
+		SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+		SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
 	}
 
-	void HookEntityDtor()
-	{
-		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
-		dtor(pEntity);
-		RETURN_META(MRES_IGNORED);
-	}
+	void HookEntityDtor();
 	
 	int HookOnTakeDamage(const CTakeDamageInfo &info)
 	{
+		if(!callback) {
+			RETURN_META_VALUE(MRES_IGNORED, 0);
+		}
+
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
 		::DamageInfoToAddr(info, addr);
 		
@@ -450,6 +422,10 @@ struct callback_holder_t
 
 	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
 	{
+		if(!alive_callback) {
+			RETURN_META_VALUE(MRES_IGNORED, 0);
+		}
+
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
 		::DamageInfoToAddr(info, addr);
 		
@@ -465,21 +441,34 @@ struct callback_holder_t
 	}
 };
 
-using callback_holder_map_t = std::unordered_map<CBaseEntity *, callback_holder_t *>;
+using callback_holder_map_t = std::unordered_map<int, callback_holder_t *>;
 callback_holder_map_t callbackmap{};
 
-callback_holder_t::callback_holder_t(CBaseEntity *pEntity, IdentityToken_t *owner_)
-	: pEntity_{pEntity}, owner{owner_}
+void callback_holder_t::HookEntityDtor()
 {
-	SH_ADD_MANUALHOOK(GenericDtor, pEntity_, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
+	CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+	int this_ref = gamehelpers->EntityToBCompatRef(pEntity);
+	dtor(pEntity);
+	callbackmap.erase(this_ref);
+	erase = false;
+	delete this;
+	RETURN_META(MRES_IGNORED);
+}
+
+callback_holder_t::callback_holder_t(CBaseEntity *pEntity, int ref_, IdentityToken_t *owner_)
+	: owner{owner_}, ref{ref_}
+{
+	SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
+	SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+	SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
 	
-	callbackmap[pEntity_] = this;
+	callbackmap.emplace(ref, this);
 }
 
 callback_holder_t::~callback_holder_t()
 {
 	if(erase) {
-		callbackmap.erase(pEntity_);
+		callbackmap.erase(ref);
 	}
 }
 
@@ -534,16 +523,24 @@ static cell_t SetEntityOnTakeDamage(IPluginContext *pContext, const cell_t *para
 	}
 	
 	callback_holder_t *holder = nullptr;
+
+	int ref = gamehelpers->EntityToBCompatRef(pEntity);
 	
-	callback_holder_map_t::iterator it{callbackmap.find(pEntity)};
+	callback_holder_map_t::iterator it{callbackmap.find(ref)};
 	if(it != callbackmap.end()) {
 		holder = it->second;
+
+		if(holder->owner != pContext->GetIdentity()) {
+			return pContext->ThrowNativeError("Another plugin already set this entity OnTakeDamage callback");
+		}
 	} else {
-		holder = new callback_holder_t{pEntity, pContext->GetIdentity()};
+		holder = new callback_holder_t{pEntity, ref, pContext->GetIdentity()};
 	}
 	
 	IPluginFunction *callback = pContext->GetFunctionById(params[2]);
-	holder->add_hook(pEntity, callback, params[3]);
+
+	holder->callback = callback;
+	holder->data = params[3];
 	
 	return 0;
 }
@@ -556,16 +553,24 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 	}
 	
 	callback_holder_t *holder = nullptr;
+
+	int ref = gamehelpers->EntityToBCompatRef(pEntity);
 	
-	callback_holder_map_t::iterator it{callbackmap.find(pEntity)};
+	callback_holder_map_t::iterator it{callbackmap.find(ref)};
 	if(it != callbackmap.end()) {
 		holder = it->second;
+
+		if(holder->owner != pContext->GetIdentity()) {
+			return pContext->ThrowNativeError("Another plugin already set this entity OnTakeDamageAlive callback");
+		}
 	} else {
-		holder = new callback_holder_t{pEntity, pContext->GetIdentity()};
+		holder = new callback_holder_t{pEntity, ref, pContext->GetIdentity()};
 	}
 	
 	IPluginFunction *callback = pContext->GetFunctionById(params[2]);
-	holder->add_alive_hook(pEntity, callback, params[3]);
+
+	holder->alive_callback = callback;
+	holder->alive_data = params[3];
 	
 	return 0;
 }
@@ -596,10 +601,16 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 {
 	callback_holder_map_t::iterator it{callbackmap.begin()};
 	while(it != callbackmap.end()) {
-		if(it->second->owner == plugin->GetIdentity()) {
-			it->second->erase = false;
-			callbackmap.erase(it);
-			it->second->dtor(it->second->pEntity_);
+		callback_holder_t *holder = it->second;
+
+		if(holder->owner == plugin->GetIdentity()) {
+			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(holder->ref);
+			if(pEntity) {
+				holder->dtor(pEntity);
+			}
+			holder->erase = false;
+			delete holder;
+			it = callbackmap.erase(it);
 			continue;
 		}
 		
