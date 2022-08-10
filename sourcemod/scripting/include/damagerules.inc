@@ -60,12 +60,7 @@ enum
 
 #define CTakeDamageInfoVar any[]
 
-typeset damagerules_funcs
-{
-	//OnTakeDamage
-	//OnTakeDamage_Alive
-	function int (int entity, CTakeDamageInfo info, any data);
-}
+typedef ondamage_func_t = function int (int entity, CTakeDamageInfo info, any data);
 
 #if defined GAME_TF2
 enum struct DamageModifyExtras_t
@@ -93,8 +88,8 @@ native int TakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
 
-native void SetEntityOnTakeDamage(int entity, damagerules_funcs func, any data = 0);
-native void SetEntityOnTakeDamageAlive(int entity, damagerules_funcs func, any data = 0);
+native void SetEntityOnTakeDamage(int entity, ondamage_func_t func, any data = 0);
+native void SetEntityOnTakeDamageAlive(int entity, ondamage_func_t func, any data = 0);
 
 stock int baseline_ontakedamage(int entity, CTakeDamageInfo info, any data)
 {
