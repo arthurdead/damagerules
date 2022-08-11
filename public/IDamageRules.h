@@ -31,17 +31,27 @@ public:
 		AddrToDamageInfo(addr, info);
 	}
 	
-	void DamageInfoToParam(IPluginContext *ctx, CTakeDamageInfo &info, cell_t local)
+	void DamageInfoToParam(IPluginContext *ctx, const CTakeDamageInfo &info, cell_t local)
 	{
 		cell_t *addr = nullptr;
 		ctx->LocalToPhysAddr(local, &addr);
 		DamageInfoToAddr(info, addr);
 	}
 	
-	void PushDamageInfo(ICallable *func, const CTakeDamageInfo &info, bool copyback = false)
+	void PushDamageInfo(ICallable *func, const CTakeDamageInfo &info)
 	{
 		static size_t size = SPDamageInfoStructSize();
 		cell_t *addr = new cell_t[size];
+		DamageInfoToAddr(info, addr);
+		func->PushArray(addr, size, 0);
+		delete[] addr;
+	}
+
+	void PushDamageInfo(ICallable *func, CTakeDamageInfo &info, bool copyback)
+	{
+		static size_t size = SPDamageInfoStructSize();
+		cell_t *addr = new cell_t[size];
+		DamageInfoToAddr(info, addr);
 		func->PushArray(addr, size, copyback ? SM_PARAM_COPYBACK : 0);
 		delete[] addr;
 	}
