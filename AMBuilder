@@ -14,6 +14,15 @@ sourceFiles = [
 
 project = Extension.HL2Project(builder, projectName + '.ext')
 
+wpnhackpath = os.path.join(builder.currentSourcePath, '../wpnhack')
+if not os.path.exists(wpnhackpath):
+	if 'WPNHACKSRC' in os.environ:
+		wpnhackpath = os.environ['WPNHACKSRC']
+
+if os.path.exists(wpnhackpath):
+	project.compiler.defines += ['__HAS_WPNHACK']
+	project.compiler.cxxincludes += [wpnhackpath,os.path.join(wpnhackpath,'public')]
+
 if os.path.isfile(os.path.join(builder.currentSourcePath, 'sdk', 'smsdk_ext.cpp')):
   # Use the copy included in the project
   project.sources += [os.path.join('sdk', 'smsdk_ext.cpp')]

@@ -70,6 +70,34 @@
 			{
 				"linux" "419"
 			}
+			"CGameRules::GetSkillLevel"
+			{
+				"linux" "51"
+			}
+			"CGameRules::AdjustPlayerDamageTaken"
+			{
+				"linux" "86"
+			}
+			"CGameRules::AdjustPlayerDamageInflicted"
+			{
+				"linux" "85"
+			}
+			"CGameRules::ShouldUseRobustRadiusDamage"
+			{
+				"linux" "68"
+			}
+			"CGameRules::GetAmmoDamage"
+			{
+				"linux" "33"
+			}
+			"CBaseEntity::IsNPC"
+			{
+				"linux" "71"
+			}
+			"CBaseEntity::MyCombatCharacterPointer"
+			{
+				"linux" "72"
+			}
 		}
 	}
 }

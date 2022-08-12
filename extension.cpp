@@ -29,6 +29,8 @@
  * Version: $Id$
  */
 
+#include <unordered_map>
+
 #define protected public
 
 #include <ehandle.h>
@@ -41,7 +43,10 @@
 
 #include <server_class.h>
 #include <eiface.h>
-#include <unordered_map>
+#include <shareddefs.h>
+#ifdef __HAS_WPNHACK
+#include <IWpnHack.h>
+#endif
 
 /**
  * @file extension.cpp
@@ -55,6 +60,9 @@ SMEXT_LINK(&g_Sample);
 ISDKTools *g_pSDKTools = nullptr;
 ISDKHooks *g_pSDKHooks = nullptr;
 IServerGameEnts *gameents = nullptr;
+#ifdef __HAS_WPNHACK
+IWpnHack *g_pWpnHack = nullptr;
+#endif
 
 #if SOURCE_ENGINE == SE_TF2
 int CTFWeaponBaseApplyOnHitAttributes = -1;
@@ -109,6 +117,14 @@ R call_vfunc(T *pThisPtr, size_t offset, Args ...args)
 	void *vfunc = vtable[offset];
 	
 	return call_mfunc<R, T, Args...>(pThisPtr, vfunc, args...);
+}
+
+template <typename T>
+void *func_to_void(T ptr)
+{
+	union { T f; void *p; };
+	f = ptr;
+	return p;
 }
 
 #if SOURCE_ENGINE == SE_TF2
@@ -274,6 +290,7 @@ class CGameRules;
 
 CBaseEntity *g_pGameRulesProxyEntity = nullptr;
 CGameRules *g_pGameRules = nullptr;
+CBaseEntityList *g_pEntityList = nullptr;
 
 #if SOURCE_ENGINE == SE_TF2
 static cell_t ApplyOnDamageModifyRules(IPluginContext *pContext, const cell_t *params)
@@ -628,6 +645,15 @@ void Sample::OnCoreMapEnd()
 bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
 	GET_V_IFACE_ANY(GetServerFactory, gameents, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
+	GET_V_IFACE_CURRENT(GetEngineFactory, cvar, ICvar, CVAR_INTERFACE_VERSION);
+	g_pCVar = cvar;
+	ConVar_Register(0, this);
+	return true;
+}
+
+bool Sample::RegisterConCommandBase(ConCommandBase *pCommand)
+{
+	META_REGCVAR(pCommand);
 	return true;
 }
 
@@ -652,16 +678,310 @@ CBaseEntity * FindEntityByServerClassname(int iStart, const char * pServerClassN
 	return nullptr;
 }
 
+int CBaseEntityIsNPC = -1;
+int CBaseEntityMyCombatCharacterPointer = -1;
+
+class CBasePlayer;
+class CBaseCombatCharacter;
+
+int CBaseEntityOnTakeDamageOffset = -1;
+void *CBasePlayerOnTakeDamagePtr = nullptr;
+
+class CBaseEntity : public IServerEntity
+{
+public:
+	CBasePlayer *IsPlayer()
+	{
+		int idx = gamehelpers->EntityToBCompatRef(this);
+		if(idx >= 1 && idx <= playerhelpers->GetNumPlayers()) {
+			return (CBasePlayer *)this;
+		} else {
+			return nullptr;
+		}
+	}
+
+	bool IsNPC()
+	{
+		return call_vfunc<bool>(this, CBaseEntityIsNPC);
+	}
+
+	CBaseCombatCharacter *MyCombatCharacterPointer()
+	{
+		return call_vfunc<CBaseCombatCharacter *>(this, CBaseEntityMyCombatCharacterPointer);
+	}
+};
+
+class CBasePlayer : public CBaseEntity
+{
+public:
+	int OnTakeDamage( const CTakeDamageInfo &info )
+	{
+		return call_mfunc<int, CBasePlayer, const CTakeDamageInfo &>(this, CBasePlayerOnTakeDamagePtr, info);
+	}
+};
+
+static bool gamerules_vtable_assigned{false};
+
+// Controls the application of the robus radius damage model.
+ConVar	sv_robust_explosions( "sv_robust_explosions","1", FCVAR_REPLICATED );
+
+// Damage scale for damage inflicted by the player on each skill level.
+ConVar	sk_dmg_inflict_scale1( "sk_dmg_inflict_scale1", "1.50", FCVAR_REPLICATED );
+ConVar	sk_dmg_inflict_scale2( "sk_dmg_inflict_scale2", "1.00", FCVAR_REPLICATED );
+ConVar	sk_dmg_inflict_scale3( "sk_dmg_inflict_scale3", "0.75", FCVAR_REPLICATED );
+
+// Damage scale for damage taken by the player on each skill level.
+ConVar	sk_dmg_take_scale1( "sk_dmg_take_scale1", "0.50", FCVAR_REPLICATED );
+ConVar	sk_dmg_take_scale2( "sk_dmg_take_scale2", "1.00", FCVAR_REPLICATED );
+ConVar	sk_dmg_take_scale3( "sk_dmg_take_scale3", "2.0", FCVAR_REPLICATED );
+
+int CGameRulesAdjustPlayerDamageTaken = -1;
+int CGameRulesAdjustPlayerDamageInflicted = -1;
+int CGameRulesShouldUseRobustRadiusDamage = -1;
+int CGameRulesGetAmmoDamageOffset = -1;
+void *CGameRulesGetAmmoDamagePtr = nullptr;
+
+int CGameRulesGetSkillLevel = -1;
+
+class CAmmoDef
+#ifdef __HAS_WPNHACK
+	: public IAmmoDef
+#endif
+{
+#ifndef __HAS_WPNHACK
+	static int PlrDamage(int nAmmoIndex)
+	{
+		return 0;
+	}
+
+	static int NPCDamage(int nAmmoIndex)
+	{
+		return 0;
+	}
+
+	static int DamageType(int nAmmoIndex)
+	{
+		return 0;
+	}
+#endif
+};
+
+CAmmoDef *GetAmmoDef()
+{
+#ifdef __HAS_WPNHACK
+	return (CAmmoDef *)g_pWpnHack->AmmoDef();
+#else
+	return nullptr;
+#endif
+}
+
+class CGameRules
+{
+public:
+	int GetSkillLevel()
+	{
+		return call_vfunc<int>(this, CGameRulesGetSkillLevel);
+	}
+
+	float GetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
+	{
+		return call_mfunc<float, CGameRules, CBaseEntity *, CBaseEntity *, int>(this, CGameRulesGetAmmoDamagePtr, pAttacker, pVictim, nAmmoType);
+	}
+
+	float AdjustPlayerDamageInflicted( float damage )
+	{
+		return call_vfunc<float, CGameRules, float>(this, CGameRulesAdjustPlayerDamageInflicted, damage);
+	}
+
+	void  AdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
+	{
+		call_vfunc<void, CGameRules, CTakeDamageInfo *>(this, CGameRulesAdjustPlayerDamageTaken, pInfo);
+	}
+};
+
+class GameRulesVTableHack
+{
+public:
+	void AdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
+	{
+		CGameRules *pThis = (CGameRules *)this;
+
+		if( pInfo->GetDamageType() & (DMG_DROWN|DMG_CRUSH|DMG_FALL|DMG_POISON) )
+		{
+			// Skill level doesn't affect these types of damage.
+			return;
+		}
+
+		switch( pThis->GetSkillLevel() )
+		{
+		case SKILL_EASY:
+			pInfo->ScaleDamage( sk_dmg_take_scale1.GetFloat() );
+			break;
+
+		case SKILL_MEDIUM:
+			pInfo->ScaleDamage( sk_dmg_take_scale2.GetFloat() );
+			break;
+
+		case SKILL_HARD:
+			pInfo->ScaleDamage( sk_dmg_take_scale3.GetFloat() );
+			break;
+		}
+	}
+
+	//TODO!!!!! call this only on melee weapons
+	float AdjustPlayerDamageInflicted( float damage )
+	{
+		CGameRules *pThis = (CGameRules *)this;
+
+		switch( pThis->GetSkillLevel() ) 
+		{
+		case SKILL_EASY:
+			return damage * sk_dmg_inflict_scale1.GetFloat();
+			break;
+
+		case SKILL_MEDIUM:
+			return damage * sk_dmg_inflict_scale2.GetFloat();
+			break;
+
+		case SKILL_HARD:
+			return damage * sk_dmg_inflict_scale3.GetFloat();
+			break;
+
+		default:
+			return damage;
+			break;
+		}
+	}
+
+	bool ShouldUseRobustRadiusDamage(CBaseEntity *pEntity)
+	{
+		if( !sv_robust_explosions.GetBool() )
+			return false;
+
+		if( !pEntity->IsNPC() )
+		{
+			// Only NPC's
+			return false;
+		}
+
+		return true;
+	}
+
+	float GetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
+	{
+		CGameRules *pThis = (CGameRules *)this;
+
+		float flDamage = 0.0f;
+		CAmmoDef *pAmmoDef = GetAmmoDef();
+
+		flDamage = pThis->GetAmmoDamage( pAttacker, pVictim, nAmmoType );
+
+		if( pAttacker->IsPlayer() && pVictim->IsNPC() )
+		{
+			if( pVictim->MyCombatCharacterPointer() )
+			{
+				// Player is shooting an NPC. Adjust the damage! This protects breakables
+				// and other 'non-living' entities from being easier/harder to break
+				// in different skill levels.
+				flDamage = pAmmoDef->PlrDamage( nAmmoType );
+				flDamage = AdjustPlayerDamageInflicted( flDamage );
+			}
+		}
+
+		return flDamage;
+	}
+};
+
+#include <sourcehook/sh_memory.h>
+
 void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 {
 	g_pGameRulesProxyEntity = FindEntityByServerClassname(0, g_szGameRulesProxy);
 	g_pGameRules = (CGameRules *)g_pSDKTools->GetGameRules();
+
+	if(!gamerules_vtable_assigned) {
+		if(g_pGameRules) {
+			void **vtabl = *(void ***)g_pGameRules;
+
+			SourceHook::SetMemAccess(vtabl, (CGameRulesAdjustPlayerDamageTaken * sizeof(void *)) + 4, SH_MEM_READ|SH_MEM_WRITE|SH_MEM_EXEC);
+
+			vtabl[CGameRulesAdjustPlayerDamageTaken] = func_to_void(&GameRulesVTableHack::AdjustPlayerDamageTaken);
+			vtabl[CGameRulesAdjustPlayerDamageInflicted] = func_to_void(&GameRulesVTableHack::AdjustPlayerDamageInflicted);
+			vtabl[CGameRulesShouldUseRobustRadiusDamage] = func_to_void(&GameRulesVTableHack::ShouldUseRobustRadiusDamage);
+			CGameRulesGetAmmoDamagePtr = vtabl[CGameRulesGetAmmoDamageOffset];
+			vtabl[CGameRulesGetAmmoDamageOffset] = func_to_void(&GameRulesVTableHack::GetAmmoDamage);
+
+			gamerules_vtable_assigned = true;
+		}
+	}
+}
+
+static bool player_vtable_assgined{false};
+
+void CTakeDamageInfo::AdjustPlayerDamageInflictedForSkillLevel()
+{
+	CopyDamageToBaseDamage();
+	SetDamage( g_pGameRules->AdjustPlayerDamageInflicted(GetDamage()) );
+}
+
+void CTakeDamageInfo::AdjustPlayerDamageTakenForSkillLevel()
+{
+	CopyDamageToBaseDamage();
+	g_pGameRules->AdjustPlayerDamageTaken(this);
+}
+
+class PlayerVTableHack
+{
+public:
+	int OnTakeDamage( const CTakeDamageInfo &info )
+	{
+		CBasePlayer *pThis = (CBasePlayer *)this;
+
+		// Modify the amount of damage the player takes, based on skill.
+		CTakeDamageInfo playerDamage = info;
+
+		// Should we run this damage through the skill level adjustment?
+		bool bAdjustForSkillLevel = true;
+
+		if( info.GetDamageType() == DMG_GENERIC && info.GetAttacker() == pThis && info.GetInflictor() == pThis )
+		{
+			// Only do a skill level adjustment if the player isn't his own attacker AND inflictor.
+			// This prevents damage from SetHealth() inputs from being adjusted for skill level.
+			bAdjustForSkillLevel = false;
+		}
+
+		if( bAdjustForSkillLevel )
+		{
+			playerDamage.AdjustPlayerDamageTakenForSkillLevel();
+		}
+
+		return pThis->OnTakeDamage( playerDamage );
+	}
+};
+
+void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname)
+{
+	if(strcmp(classname, "player") == 0) {
+		if(!player_vtable_assgined) {
+			void **vtabl = *(void ***)pEntity;
+
+			SourceHook::SetMemAccess(vtabl, (CGameRulesAdjustPlayerDamageTaken * sizeof(void *)) + 4, SH_MEM_READ|SH_MEM_WRITE|SH_MEM_EXEC);
+
+			CBasePlayerOnTakeDamagePtr = vtabl[CBaseEntityOnTakeDamageOffset];
+			vtabl[CBaseEntityOnTakeDamageOffset] = func_to_void(&PlayerVTableHack::OnTakeDamage);
+
+			player_vtable_assgined = true;
+		}
+	}
 }
 
 void Sample::SDK_OnAllLoaded()
 {
 	SM_GET_LATE_IFACE(SDKTOOLS, g_pSDKTools);
 	SM_GET_LATE_IFACE(SDKHOOKS, g_pSDKHooks);
+#ifdef __HAS_WPNHACK
+	SM_GET_LATE_IFACE(WPNHACK, g_pWpnHack);
+#endif
 	
 	g_pSDKHooks->AddEntityListener(this);
 }
@@ -676,7 +996,10 @@ bool Sample::QueryInterfaceDrop(SMInterface *pInterface)
 {
 	if(pInterface == g_pSDKHooks)
 		return false;
-
+#ifdef __HAS_WPNHACK
+	else if(pInterface == g_pWpnHack)
+		return false;
+#endif
 	return IExtensionInterface::QueryInterfaceDrop(pInterface);
 }
 
@@ -687,6 +1010,12 @@ void Sample::NotifyInterfaceDrop(SMInterface *pInterface)
 		g_pSDKHooks->RemoveEntityListener(this);
 		g_pSDKHooks = NULL;
 	}
+#ifdef __HAS_WPNHACK
+	else if(strcmp(pInterface->GetInterfaceName(), SMINTERFACE_WPNHACK_NAME) == 0)
+	{
+		g_pWpnHack = NULL;
+	}
+#endif
 }
 
 void Sample::SDK_OnUnload()
@@ -705,14 +1034,21 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 	
 	gameconfs->LoadGameConfigFile("damagerules", &g_pGameConf, nullptr, 0);
-	
+
+	g_pGameConf->GetOffset("CBaseEntity::IsNPC", &CBaseEntityIsNPC);
+	g_pGameConf->GetOffset("CGameRules::GetSkillLevel", &CGameRulesGetSkillLevel);
+	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageTaken", &CGameRulesAdjustPlayerDamageTaken);
+	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageInflicted", &CGameRulesAdjustPlayerDamageInflicted);
+	g_pGameConf->GetOffset("CGameRules::ShouldUseRobustRadiusDamage", &CGameRulesShouldUseRobustRadiusDamage);
+	g_pGameConf->GetOffset("CGameRules::GetAmmoDamage", &CGameRulesGetAmmoDamageOffset);
+
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
 #endif
 	
 	int offset = -1;
-	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &offset);
-	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, offset, 0, 0);
+	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
+	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamageOffset, 0, 0);
 	
 	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &offset);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, offset, 0, 0);
@@ -727,14 +1063,20 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	
 	gameconfs->CloseGameConfigFile(g_pGameConf);
 
+	g_pEntityList = reinterpret_cast<CBaseEntityList *>(gamehelpers->GetGlobalEntityList());
+
 	sharesys->AddDependency(myself, "sdkhooks.ext", true, true);
 	
 	sharesys->AddInterface(myself, this);
 	sharesys->AddNatives(myself, g_sNativesInfo);
 	
 	plsys->AddPluginsListener(this);
+
+#ifdef __HAS_WPNHACK
+	sharesys->AddDependency(myself, "wpnhack.ext", false, true);
+#endif
 	
 	sharesys->RegisterLibrary(myself, "damagerules");
-	
+
 	return true;
 }
