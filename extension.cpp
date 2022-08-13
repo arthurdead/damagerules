@@ -642,12 +642,65 @@ void Sample::OnCoreMapEnd()
 	g_pGameRulesProxyEntity = nullptr;
 }
 
+ConVar *skill = nullptr;
+bool ignore_skill_change = false;
+ConVar *tf_mvm_skill = nullptr;
+bool ignore_mvm_change = false;
+
+void skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
+{
+	if(ignore_skill_change) {
+		ignore_skill_change = false;
+		return;
+	}
+
+	ignore_mvm_change = true;
+
+	ConVarRef cVarRef( pVar );
+
+	switch(cVarRef.GetInt()) {
+		case SKILL_EASY: tf_mvm_skill->SetValue(1); break;
+		case SKILL_MEDIUM: tf_mvm_skill->SetValue(3); break;
+		case SKILL_HARD: tf_mvm_skill->SetValue(5); break;
+	}
+}
+
+void mvm_skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
+{
+	if(ignore_mvm_change) {
+		ignore_mvm_change = false;
+		return;
+	}
+
+	ignore_skill_change = true;
+
+	ConVarRef cVarRef( pVar );
+
+	switch(cVarRef.GetInt()) {
+		case 1:
+		case 2: skill->SetValue(SKILL_EASY); break;
+		case 3: skill->SetValue(SKILL_MEDIUM); break;
+		case 4:
+		case 5: skill->SetValue(SKILL_HARD); break;
+	}
+}
+
 bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
 	GET_V_IFACE_ANY(GetServerFactory, gameents, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
 	GET_V_IFACE_CURRENT(GetEngineFactory, cvar, ICvar, CVAR_INTERFACE_VERSION);
 	g_pCVar = cvar;
 	ConVar_Register(0, this);
+
+	skill = g_pCVar->FindVar("skill");
+	skill->SetValue(SKILL_MEDIUM);
+
+	tf_mvm_skill = g_pCVar->FindVar("tf_mvm_skill");
+	tf_mvm_skill->SetValue(3);
+
+	skill->InstallChangeCallback(skill_changed);
+	tf_mvm_skill->InstallChangeCallback(mvm_skill_changed);
+
 	return true;
 }
 
