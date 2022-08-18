@@ -146,10 +146,6 @@ struct DamageModifyExtras_t
 	bool bSendPreFeignDamage{false};
 	bool bPlayDamageReductionSound{false};
 };
-
-#define DAMAGEINFO_STRUCT_SIZE 26
-#elif SOURCE_ENGINE == SE_LEFT4DEAD2
-#define DAMAGEINFO_STRUCT_SIZE 20
 #endif
 
 void SetHandleEntity(CBaseHandle &hndl, edict_t *pEdict)
@@ -179,71 +175,121 @@ edict_t *GetHandleEntity(const CBaseHandle &hndl)
 using ECritType = CTakeDamageInfo::ECritType;
 #endif
 
+Vector addr_deref_vec(const cell_t *&addr)
+{
+	Vector ret;
+
+	ret.x = sp_ctof(*addr);
+	++addr;
+
+	ret.y = sp_ctof(*addr);
+	++addr;
+
+	ret.z = sp_ctof(*addr);
+	++addr;
+
+	return ret;
+}
+
+void addr_read_vec(cell_t *&addr, const Vector &vec)
+{
+	*addr = sp_ftoc(vec.x);
+	++addr;
+
+	*addr = sp_ftoc(vec.y);
+	++addr;
+
+	*addr = sp_ftoc(vec.z);
+	++addr;
+}
+
 void AddrToDamageInfo(CTakeDamageInfo &info, const cell_t *addr)
 {
-	info.m_vecDamageForce.x = sp_ctof(addr[0]);
-	info.m_vecDamageForce.y = sp_ctof(addr[1]);
-	info.m_vecDamageForce.z = sp_ctof(addr[2]);
-	info.m_vecDamagePosition.x = sp_ctof(addr[3]);
-	info.m_vecDamagePosition.y = sp_ctof(addr[4]);
-	info.m_vecDamagePosition.z = sp_ctof(addr[5]);
-	info.m_vecReportedPosition.x = sp_ctof(addr[6]);
-	info.m_vecReportedPosition.y = sp_ctof(addr[7]);
-	info.m_vecReportedPosition.z = sp_ctof(addr[8]);
-	SetHandleEntity(info.m_hInflictor, gamehelpers->EdictOfIndex(addr[9]));
-	SetHandleEntity(info.m_hAttacker, gamehelpers->EdictOfIndex(addr[10]));
-	SetHandleEntity(info.m_hWeapon, gamehelpers->EdictOfIndex(addr[11]));
-	info.m_flDamage = sp_ctof(addr[12]);
-	info.m_flMaxDamage = sp_ctof(addr[13]);
-	info.m_flBaseDamage = sp_ctof(addr[14]);
-	info.m_bitsDamageType = addr[15];
-	info.m_iDamageCustom = addr[16];
-	info.m_iDamageStats = addr[17];
-	info.m_iAmmoType = addr[18];
+	const cell_t *tmp_addr{addr};
+	info.m_vecDamageForce = addr_deref_vec(tmp_addr);
+	info.m_vecDamagePosition = addr_deref_vec(tmp_addr);
+	info.m_vecReportedPosition = addr_deref_vec(tmp_addr);
+	SetHandleEntity(info.m_hInflictor, gamehelpers->EdictOfIndex(*tmp_addr));
+	++tmp_addr;
+	SetHandleEntity(info.m_hAttacker, gamehelpers->EdictOfIndex(*tmp_addr));
+	++tmp_addr;
+	SetHandleEntity(info.m_hWeapon, gamehelpers->EdictOfIndex(*tmp_addr));
+	++tmp_addr;
+	info.m_flDamage = sp_ctof(*tmp_addr);
+	++tmp_addr;
+	info.m_flMaxDamage = sp_ctof(*tmp_addr);
+	++tmp_addr;
+	info.m_flBaseDamage = sp_ctof(*tmp_addr);
+	++tmp_addr;
+	info.m_bitsDamageType = *tmp_addr;
+	++tmp_addr;
+	info.m_iDamageCustom = *tmp_addr;
+	++tmp_addr;
+	info.m_iDamageStats = *tmp_addr;
+	++tmp_addr;
+	info.m_iAmmoType = *tmp_addr;
+	++tmp_addr;
 #if SOURCE_ENGINE == SE_TF2
-	info.m_iDamagedOtherPlayers = addr[19];
-	info.m_iPlayerPenetrationCount = addr[20];
-	info.m_flDamageBonus = sp_ctof(addr[21]);
-	SetHandleEntity(info.m_hDamageBonusProvider, gamehelpers->EdictOfIndex(addr[22]));
-	info.m_bForceFriendlyFire = addr[23];
-	info.m_flDamageForForce = sp_ctof(addr[24]);
-	info.m_eCritType = (ECritType)addr[25];
+	info.m_iDamagedOtherPlayers = *tmp_addr;
+	++tmp_addr;
+	info.m_iPlayerPenetrationCount = *tmp_addr;
+	++tmp_addr;
+	info.m_flDamageBonus = sp_ctof(*tmp_addr);
+	++tmp_addr;
+	SetHandleEntity(info.m_hDamageBonusProvider, gamehelpers->EdictOfIndex(*tmp_addr));
+	++tmp_addr;
+	info.m_bForceFriendlyFire = *tmp_addr;
+	++tmp_addr;
+	info.m_flDamageForForce = sp_ctof(*tmp_addr);
+	++tmp_addr;
+	info.m_eCritType = (ECritType)*tmp_addr;
 #elif SOURCE_ENGINE == SE_LEFT4DEAD2
-	info.m_flRadius = sp_ctof(addr[19]);
+	info.m_flRadius = sp_ctof(*tmp_addr);
 #endif
 }
 
 void DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr)
 {
-	addr[0] = sp_ftoc(info.m_vecDamageForce.x);
-	addr[1] = sp_ftoc(info.m_vecDamageForce.y);
-	addr[2] = sp_ftoc(info.m_vecDamageForce.z);
-	addr[3] = sp_ftoc(info.m_vecDamagePosition.x);
-	addr[4] = sp_ftoc(info.m_vecDamagePosition.y);
-	addr[5] = sp_ftoc(info.m_vecDamagePosition.z);
-	addr[6] = sp_ftoc(info.m_vecReportedPosition.x);
-	addr[7] = sp_ftoc(info.m_vecReportedPosition.y);
-	addr[8] = sp_ftoc(info.m_vecReportedPosition.z);
-	addr[9] = IndexOfEdict(GetHandleEntity(info.m_hInflictor));
-	addr[10] = IndexOfEdict(GetHandleEntity(info.m_hAttacker));
-	addr[11] = IndexOfEdict(GetHandleEntity(info.m_hWeapon));
-	addr[12] = sp_ftoc(info.m_flDamage);
-	addr[13] = sp_ftoc(info.m_flMaxDamage);
-	addr[14] = sp_ftoc(info.m_flBaseDamage);
-	addr[15] = info.m_bitsDamageType;
-	addr[16] = info.m_iDamageCustom;
-	addr[17] = info.m_iDamageStats;
-	addr[18] = info.m_iAmmoType;
+	cell_t *tmp_addr{addr};
+	addr_read_vec(tmp_addr, info.m_vecDamageForce);
+	addr_read_vec(tmp_addr, info.m_vecDamagePosition);
+	addr_read_vec(tmp_addr, info.m_vecReportedPosition);
+	*tmp_addr = IndexOfEdict(GetHandleEntity(info.m_hInflictor));
+	++tmp_addr;
+	*tmp_addr = IndexOfEdict(GetHandleEntity(info.m_hAttacker));
+	++tmp_addr;
+	*tmp_addr = IndexOfEdict(GetHandleEntity(info.m_hWeapon));
+	++tmp_addr;
+	*tmp_addr = sp_ftoc(info.m_flDamage);
+	++tmp_addr;
+	*tmp_addr = sp_ftoc(info.m_flMaxDamage);
+	++tmp_addr;
+	*tmp_addr = sp_ftoc(info.m_flBaseDamage);
+	++tmp_addr;
+	*tmp_addr = info.m_bitsDamageType;
+	++tmp_addr;
+	*tmp_addr = info.m_iDamageCustom;
+	++tmp_addr;
+	*tmp_addr = info.m_iDamageStats;
+	++tmp_addr;
+	*tmp_addr = info.m_iAmmoType;
+	++tmp_addr;
 #if SOURCE_ENGINE == SE_TF2
-	addr[19] = info.m_iDamagedOtherPlayers;
-	addr[20] = info.m_iPlayerPenetrationCount;
-	addr[21] = sp_ftoc(info.m_flDamageBonus);
-	addr[22] = IndexOfEdict(GetHandleEntity(info.m_hDamageBonusProvider));
-	addr[23] = info.m_bForceFriendlyFire;
-	addr[24] = sp_ftoc(info.m_flDamageForForce);
-	addr[25] = info.m_eCritType;
+	*tmp_addr = info.m_iDamagedOtherPlayers;
+	++tmp_addr;
+	*tmp_addr = info.m_iPlayerPenetrationCount;
+	++tmp_addr;
+	*tmp_addr = sp_ftoc(info.m_flDamageBonus);
+	++tmp_addr;
+	*tmp_addr = IndexOfEdict(GetHandleEntity(info.m_hDamageBonusProvider));
+	++tmp_addr;
+	*tmp_addr = info.m_bForceFriendlyFire;
+	++tmp_addr;
+	*tmp_addr = sp_ftoc(info.m_flDamageForForce);
+	++tmp_addr;
+	*tmp_addr = info.m_eCritType;
 #elif SOURCE_ENGINE == SE_LEFT4DEAD2
-	addr[19] = sp_ftoc(info.m_flRadius);
+	*tmp_addr = sp_ftoc(info.m_flRadius);
 #endif
 }
 
@@ -257,9 +303,43 @@ void Sample::DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr)
 	::DamageInfoToAddr(info, addr);
 }
 
+void Sample::ParamToDamageInfo(IPluginContext *ctx, cell_t local, CTakeDamageInfo &info)
+{
+	cell_t *addr = nullptr;
+	ctx->LocalToPhysAddr(local, &addr);
+	::AddrToDamageInfo(info, addr);
+}
+
+void Sample::DamageInfoToParam(IPluginContext *ctx, const CTakeDamageInfo &info, cell_t local)
+{
+	cell_t *addr = nullptr;
+	ctx->LocalToPhysAddr(local, &addr);
+	::DamageInfoToAddr(info, addr);
+}
+
+void Sample::PushDamageInfo(ICallable *func, cell_t *addr, const CTakeDamageInfo &info)
+{
+	::DamageInfoToAddr(info, addr);
+	func->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, 0);
+}
+
+void Sample::PushDamageInfo(ICallable *func, cell_t *addr, CTakeDamageInfo &info, bool copyback)
+{
+	::DamageInfoToAddr(info, addr);
+	func->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, copyback ? SM_PARAM_COPYBACK : 0);
+	if(copyback) {
+		::AddrToDamageInfo(info, addr);
+	}
+}
+
 size_t Sample::SPDamageInfoStructSize()
 {
 	return DAMAGEINFO_STRUCT_SIZE;
+}
+
+size_t Sample::SPDamageInfoStructSizeInCell()
+{
+	return DAMAGEINFO_STRUCT_SIZE_IN_CELL;
 }
 
 #if SOURCE_ENGINE == SE_TF2
@@ -423,13 +503,13 @@ struct callback_holder_t
 			RETURN_META_VALUE(MRES_IGNORED, 0);
 		}
 
-		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
+		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL];
 		::DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE);
+		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
 		callback->PushCell(data);
 		cell_t res = 0;
 		callback->Execute(&res);
@@ -443,13 +523,13 @@ struct callback_holder_t
 			RETURN_META_VALUE(MRES_IGNORED, 0);
 		}
 
-		cell_t addr[DAMAGEINFO_STRUCT_SIZE];
+		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL];
 		::DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		alive_callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE);
+		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
 		alive_callback->PushCell(alive_data);
 		cell_t res = 0;
 		alive_callback->Execute(&res);

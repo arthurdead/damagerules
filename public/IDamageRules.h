@@ -12,6 +12,16 @@
 #define SMINTERFACE_DAMAGERULES_NAME "IDamageRules"
 #define SMINTERFACE_DAMAGERULES_VERSION 1
 
+#define BASE_DAMAGEINFO_STRUCT_SIZE ((sizeof(cell_t) * 3) * 3 + sizeof(cell_t) * 10)
+
+#if SOURCE_ENGINE == SE_TF2
+#define DAMAGEINFO_STRUCT_SIZE (BASE_DAMAGEINFO_STRUCT_SIZE + sizeof(cell_t) * 7)
+#elif SOURCE_ENGINE == SE_LEFT4DEAD2
+#define DAMAGEINFO_STRUCT_SIZE (BASE_DAMAGEINFO_STRUCT_SIZE + sizeof(cell_t) * 7)
+#endif
+
+#define DAMAGEINFO_STRUCT_SIZE_IN_CELL (DAMAGEINFO_STRUCT_SIZE / sizeof(cell_t))
+
 class IDamageRules : public SourceMod::SMInterface
 {
 public:
@@ -23,38 +33,11 @@ public:
 	virtual void AddrToDamageInfo(const cell_t *addr, CTakeDamageInfo &info) = 0;
 	virtual void DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr) = 0;
 	virtual size_t SPDamageInfoStructSize() = 0;
-	
-	void ParamToDamageInfo(IPluginContext *ctx, cell_t local, CTakeDamageInfo &info)
-	{
-		cell_t *addr = nullptr;
-		ctx->LocalToPhysAddr(local, &addr);
-		AddrToDamageInfo(addr, info);
-	}
-	
-	void DamageInfoToParam(IPluginContext *ctx, const CTakeDamageInfo &info, cell_t local)
-	{
-		cell_t *addr = nullptr;
-		ctx->LocalToPhysAddr(local, &addr);
-		DamageInfoToAddr(info, addr);
-	}
-	
-	void PushDamageInfo(ICallable *func, const CTakeDamageInfo &info)
-	{
-		static size_t size = SPDamageInfoStructSize();
-		cell_t *addr = new cell_t[size];
-		DamageInfoToAddr(info, addr);
-		func->PushArray(addr, size, 0);
-		delete[] addr;
-	}
-
-	void PushDamageInfo(ICallable *func, CTakeDamageInfo &info, bool copyback)
-	{
-		static size_t size = SPDamageInfoStructSize();
-		cell_t *addr = new cell_t[size];
-		DamageInfoToAddr(info, addr);
-		func->PushArray(addr, size, copyback ? SM_PARAM_COPYBACK : 0);
-		delete[] addr;
-	}
+	virtual size_t SPDamageInfoStructSizeInCell() = 0;
+	virtual void ParamToDamageInfo(IPluginContext *ctx, cell_t local, CTakeDamageInfo &info) = 0;
+	virtual void DamageInfoToParam(IPluginContext *ctx, const CTakeDamageInfo &info, cell_t local) = 0;
+	virtual void PushDamageInfo(ICallable *func, cell_t *addr, const CTakeDamageInfo &info) = 0;
+	virtual void PushDamageInfo(ICallable *func, cell_t *addr, CTakeDamageInfo &info, bool copyback) = 0;
 };
 
 #endif

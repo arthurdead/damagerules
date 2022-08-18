@@ -60,6 +60,11 @@ public:
 	virtual void AddrToDamageInfo(const cell_t *addr, CTakeDamageInfo &info);
 	virtual void DamageInfoToAddr(const CTakeDamageInfo &info, cell_t *addr);
 	virtual size_t SPDamageInfoStructSize();
+	virtual size_t SPDamageInfoStructSizeInCell();
+	virtual void ParamToDamageInfo(IPluginContext *ctx, cell_t local, CTakeDamageInfo &info);
+	virtual void DamageInfoToParam(IPluginContext *ctx, const CTakeDamageInfo &info, cell_t local);
+	virtual void PushDamageInfo(ICallable *func, cell_t *addr, const CTakeDamageInfo &info);
+	virtual void PushDamageInfo(ICallable *func, cell_t *addr, CTakeDamageInfo &info, bool copyback);
 	
 	virtual void OnEntityCreated(CBaseEntity *pEntity, const char *classname);
 	virtual void OnEntityDestroyed(CBaseEntity *pEntity);
