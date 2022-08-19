@@ -14,6 +14,14 @@ sourceFiles = [
 
 project = Extension.HL2Project(builder, projectName + '.ext')
 
+nextbotpath = os.path.join(builder.currentSourcePath, '../nextbot')
+if not os.path.exists(nextbotpath):
+	if 'NEXTBOTSRC' in os.environ:
+		nextbotpath = os.environ['NEXTBOTSRC']
+if os.path.exists(nextbotpath):
+	project.compiler.defines += ['__HAS_NEXTBOT']
+	project.compiler.cxxincludes += [nextbotpath,os.path.join(nextbotpath,'public')]
+
 wpnhackpath = os.path.join(builder.currentSourcePath, '../wpnhack')
 if not os.path.exists(wpnhackpath):
 	if 'WPNHACKSRC' in os.environ:

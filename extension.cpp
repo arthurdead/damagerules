@@ -30,6 +30,14 @@
  */
 
 #include <unordered_map>
+#include <string_view>
+#include <string>
+
+using namespace std::literals::string_view_literals;
+
+#ifdef __HAS_NEXTBOT
+#include <INextBotExt.h>
+#endif
 
 #define protected public
 
@@ -39,6 +47,8 @@
 
 #undef protected
 
+#undef clamp
+
 #include "extension.h"
 
 #include <server_class.h>
@@ -47,6 +57,8 @@
 #ifdef __HAS_WPNHACK
 #include <IWpnHack.h>
 #endif
+
+#include <igameevents.h>
 
 /**
  * @file extension.cpp
@@ -60,8 +72,12 @@ SMEXT_LINK(&g_Sample);
 ISDKTools *g_pSDKTools = nullptr;
 ISDKHooks *g_pSDKHooks = nullptr;
 IServerGameEnts *gameents = nullptr;
+IGameEventManager2 *gameeventmanager = nullptr;
 #ifdef __HAS_WPNHACK
 IWpnHack *g_pWpnHack = nullptr;
+#endif
+#ifdef __HAS_WPNHACK
+INextBotExt *g_pNextBot = nullptr;
 #endif
 
 #if SOURCE_ENGINE == SE_TF2
@@ -128,17 +144,6 @@ void *func_to_void(T ptr)
 }
 
 #if SOURCE_ENGINE == SE_TF2
-static cell_t HandleRageGain(IPluginContext *pContext, const cell_t *params)
-{
-	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
-	if(!pEntity) {
-		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
-	}
-	
-	(void_to_func<void(*)(CBaseEntity *, unsigned int, float, float)>(HandleRageGainPtr))(pEntity, params[1], sp_ctof(params[2]), sp_ctof(params[3]));
-	return 0;
-}
-
 struct DamageModifyExtras_t
 {
 	bool bIgniting{false};
@@ -146,6 +151,8 @@ struct DamageModifyExtras_t
 	bool bSendPreFeignDamage{false};
 	bool bPlayDamageReductionSound{false};
 };
+
+#define DMG_CRITICAL (DMG_ACID)
 #endif
 
 void SetHandleEntity(CBaseHandle &hndl, edict_t *pEdict)
@@ -170,6 +177,208 @@ edict_t *GetHandleEntity(const CBaseHandle &hndl)
 {
 	return gamehelpers->GetHandleEntity(const_cast<CBaseHandle &>(hndl));
 }
+
+int CBaseEntityIsNPC = -1;
+int CBaseEntityMyCombatCharacterPointer = -1;
+
+class CBasePlayer;
+class CBaseCombatCharacter;
+
+int CBaseEntityOnTakeDamageOffset = -1;
+int CBaseEntityOnTakeDamage_AliveOffset = -1;
+void *CBasePlayerOnTakeDamagePtr = nullptr;
+
+int m_iTeamNumOffset = -1;
+int m_iHealthOffset = -1;
+int m_hActiveWeaponOffset = -1;
+
+class CBaseEntity : public IServerEntity
+{
+public:
+	int entindex()
+	{
+		return gamehelpers->EntityToBCompatRef(this);
+	}
+
+	CBasePlayer *IsPlayer()
+	{
+		int idx = gamehelpers->EntityToBCompatRef(this);
+		if(idx >= 1 && idx <= playerhelpers->GetNumPlayers()) {
+			return (CBasePlayer *)this;
+		} else {
+			return nullptr;
+		}
+	}
+
+	bool IsNPC()
+	{
+		return call_vfunc<bool>(this, CBaseEntityIsNPC);
+	}
+
+	CBaseCombatCharacter *MyCombatCharacterPointer()
+	{
+		return call_vfunc<CBaseCombatCharacter *>(this, CBaseEntityMyCombatCharacterPointer);
+	}
+
+	int GetTeamNumber()
+	{
+		return *(int *)(((unsigned char *)this) + m_iTeamNumOffset);
+	}
+
+	int GetHealth()
+	{
+		if(m_iHealthOffset == -1) {
+			datamap_t *map = gamehelpers->GetDataMap(this);
+			sm_datatable_info_t info{};
+			gamehelpers->FindDataMapInfo(map, "m_iHealth", &info);
+			m_iHealthOffset = info.actual_offset;
+		}
+
+		return *(int *)(((unsigned char *)this) + m_iHealthOffset);
+	}
+};
+
+int CBaseCombatCharacterGetBossType = -1;
+
+using HalloweenBossType = int;
+
+class CBaseCombatCharacter : public CBaseEntity
+{
+public:
+	HalloweenBossType GetBossType()
+	{
+		return call_vfunc<HalloweenBossType, CBaseCombatCharacter>(this, CBaseCombatCharacterGetBossType);
+	}
+};
+
+class CBasePlayer : public CBaseEntity
+{
+public:
+	int OnTakeDamage( const CTakeDamageInfo &info )
+	{
+		return call_mfunc<int, CBasePlayer, const CTakeDamageInfo &>(this, CBasePlayerOnTakeDamagePtr, info);
+	}
+
+	int GetUserID()
+	{
+		return engine->GetPlayerUserId( GetNetworkable()->GetEdict() );
+	}
+};
+
+#if SOURCE_ENGINE == SE_TF2
+class CTFPlayer;
+
+int CTFWeaponBaseGetWeaponID = -1;
+
+class CTFWeaponBase : public CBaseEntity
+{
+public:
+	void ApplyOnHitAttributes( CBaseEntity *pVictimBaseEntity, CTFPlayer *pAttacker, const CTakeDamageInfo &info )
+	{
+		call_vfunc<void, CTFWeaponBase, CBaseEntity *, CTFPlayer *, const CTakeDamageInfo &>(this, CTFWeaponBaseApplyOnHitAttributes, pVictimBaseEntity, pAttacker, info);
+	}
+
+	int GetWeaponID()
+	{
+		return call_vfunc<int, CTFWeaponBase>(this, CTFWeaponBaseGetWeaponID);
+	}
+};
+
+class CTFPlayer : public CBasePlayer
+{
+public:
+	void OnDealtDamage( CBaseCombatCharacter *pVictim, const CTakeDamageInfo &info )
+	{
+		call_mfunc<void, CTFPlayer, CBaseCombatCharacter *, const CTakeDamageInfo &>(this, CTFPlayerOnDealtDamage, pVictim, info);
+	}
+
+	CTFWeaponBase *GetActiveTFWeapon()
+	{
+		if(m_hActiveWeaponOffset == -1) {
+			datamap_t *map = gamehelpers->GetDataMap(this);
+			sm_datatable_info_t info{};
+			gamehelpers->FindDataMapInfo(map, "m_hActiveWeapon", &info);
+			m_hActiveWeaponOffset = info.actual_offset;
+		}
+
+		return (CTFWeaponBase *)(CBaseEntity *)*(EHANDLE *)(((unsigned char *)this) + m_hActiveWeaponOffset);
+	}
+};
+
+enum
+{
+	kRageBuffFlag_None = 0x00,
+	kRageBuffFlag_OnDamageDealt = 0x01,
+	kRageBuffFlag_OnDamageReceived = 0x02,
+	kRageBuffFlag_OnMedicHealingReceived = 0x04,
+	kRageBuffFlag_OnBurnDamageDealt = 0x08,
+	kRageBuffFlag_OnHeal = 0x10
+};
+
+void HandleRageGain( CTFPlayer *pPlayer, unsigned int iRequiredBuffFlags, float flDamage, float fInverseRageGainScale )
+{
+	(void_to_func<void(*)(CTFPlayer *, unsigned int, float, float)>(HandleRageGainPtr))(pPlayer, iRequiredBuffFlags, flDamage, fInverseRageGainScale);
+}
+
+static cell_t HandleRageGainNative(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	HandleRageGain((CTFPlayer *)pEntity, params[1], sp_ctof(params[2]), sp_ctof(params[3]));
+	return 0;
+}
+#endif
+
+int CGameRulesAdjustPlayerDamageTaken = -1;
+int CGameRulesAdjustPlayerDamageInflicted = -1;
+int CGameRulesShouldUseRobustRadiusDamage = -1;
+int CGameRulesGetAmmoDamageOffset = -1;
+void *CGameRulesGetAmmoDamagePtr = nullptr;
+
+int CGameRulesGetSkillLevel = -1;
+
+class CGameRules
+{
+public:
+	int GetSkillLevel()
+	{
+		return call_vfunc<int>(this, CGameRulesGetSkillLevel);
+	}
+
+	float GetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
+	{
+		return call_mfunc<float, CGameRules, CBaseEntity *, CBaseEntity *, int>(this, CGameRulesGetAmmoDamagePtr, pAttacker, pVictim, nAmmoType);
+	}
+
+	float AdjustPlayerDamageInflicted( float damage )
+	{
+		return call_vfunc<float, CGameRules, float>(this, CGameRulesAdjustPlayerDamageInflicted, damage);
+	}
+
+	void  AdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
+	{
+		call_vfunc<void, CGameRules, CTakeDamageInfo *>(this, CGameRulesAdjustPlayerDamageTaken, pInfo);
+	}
+};
+
+#if SOURCE_ENGINE == SE_TF2
+class CTFGameRules : public CGameRules
+{
+public:
+	bool ApplyOnDamageModifyRules( CTakeDamageInfo &info, CBaseEntity *pVictimBaseEntity, bool bAllowDamage )
+	{
+		return call_mfunc<bool, CTFGameRules, CTakeDamageInfo &, CBaseEntity *, bool>(this, CTFGameRulesApplyOnDamageModifyRules, info, pVictimBaseEntity, bAllowDamage);
+	}
+
+	float ApplyOnDamageAliveModifyRules( const CTakeDamageInfo &info, CBaseEntity *pVictimBaseEntity, DamageModifyExtras_t& outParams )
+	{
+		return call_mfunc<float, CTFGameRules, const CTakeDamageInfo &, CBaseEntity *, DamageModifyExtras_t &>(this, CTFGameRulesApplyOnDamageAliveModifyRules, info, pVictimBaseEntity, outParams);
+	}
+};
+#endif
 
 #if SOURCE_ENGINE == SE_TF2
 using ECritType = CTakeDamageInfo::ECritType;
@@ -361,7 +570,7 @@ static cell_t CallOnDealtDamage(IPluginContext *pContext, const cell_t *params)
 	CTakeDamageInfo info{};
 	::AddrToDamageInfo(info, addr);
 	
-	call_mfunc<void, CBaseEntity, CBaseEntity *, const CTakeDamageInfo &>(pEntity, CTFPlayerOnDealtDamage, pVictim, info);
+	((CTFPlayer *)pEntity)->OnDealtDamage((CBaseCombatCharacter *)pVictim, info);
 	return 0;
 }
 #endif
@@ -390,7 +599,7 @@ static cell_t ApplyOnDamageModifyRules(IPluginContext *pContext, const cell_t *p
 	CTakeDamageInfo info{};
 	::AddrToDamageInfo(info, addr);
 	
-	bool ret = call_mfunc<bool, CGameRules, CTakeDamageInfo &, CBaseEntity *, bool>(g_pGameRules, CTFGameRulesApplyOnDamageModifyRules, info, pVictim, params[3]);
+	bool ret = ((CTFGameRules *)g_pGameRules)->ApplyOnDamageModifyRules(info, pVictim, params[3]);
 	
 	::DamageInfoToAddr(info, addr);
 	
@@ -415,7 +624,7 @@ static cell_t ApplyOnDamageAliveModifyRules(IPluginContext *pContext, const cell
 	::AddrToDamageInfo(info, addr);
 	
 	DamageModifyExtras_t extra{};
-	float ret = call_mfunc<float, CGameRules, const CTakeDamageInfo &, CBaseEntity *, DamageModifyExtras_t &>(g_pGameRules, CTFGameRulesApplyOnDamageAliveModifyRules, info, pVictim, extra);
+	float ret = ((CTFGameRules *)g_pGameRules)->ApplyOnDamageAliveModifyRules(info, pVictim, extra);
 	
 	pContext->LocalToPhysAddr(params[3], &addr);
 	
@@ -590,7 +799,7 @@ static cell_t ApplyOnHitAttributes(IPluginContext *pContext, const cell_t *param
 	CTakeDamageInfo info{};
 	::AddrToDamageInfo(info, addr);
 	
-	call_vfunc<void, CBaseEntity, CBaseEntity *, CBaseEntity *, const CTakeDamageInfo &>(pEntity, CTFWeaponBaseApplyOnHitAttributes, pVictim, pAttacker, info);
+	((CTFWeaponBase *)pEntity)->ApplyOnHitAttributes(pVictim, (CTFPlayer *)pAttacker, info);
 	
 	return 0;
 }
@@ -675,7 +884,7 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 static const sp_nativeinfo_t g_sNativesInfo[] =
 {
 #if SOURCE_ENGINE == SE_TF2
-	{"HandleRageGain", HandleRageGain},
+	{"HandleRageGain", HandleRageGainNative},
 	{"CallOnDealtDamage", CallOnDealtDamage},
 	{"ApplyOnDamageModifyRules", ApplyOnDamageModifyRules},
 	{"ApplyOnDamageAliveModifyRules", ApplyOnDamageAliveModifyRules},
@@ -724,8 +933,10 @@ void Sample::OnCoreMapEnd()
 
 ConVar *skill = nullptr;
 bool ignore_skill_change = false;
+#if SOURCE_ENGINE == SE_TF2
 ConVar *tf_mvm_skill = nullptr;
 bool ignore_mvm_change = false;
+#endif
 
 void skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 {
@@ -734,6 +945,7 @@ void skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 		return;
 	}
 
+#if SOURCE_ENGINE == SE_TF2
 	ignore_mvm_change = true;
 
 	ConVarRef cVarRef( pVar );
@@ -743,8 +955,10 @@ void skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 		case SKILL_MEDIUM: tf_mvm_skill->SetValue(3); break;
 		case SKILL_HARD: tf_mvm_skill->SetValue(5); break;
 	}
+#endif
 }
 
+#if SOURCE_ENGINE == SE_TF2
 void mvm_skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 {
 	if(ignore_mvm_change) {
@@ -764,22 +978,28 @@ void mvm_skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 		case 5: skill->SetValue(SKILL_HARD); break;
 	}
 }
+#endif
 
 bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
 	GET_V_IFACE_ANY(GetServerFactory, gameents, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
 	GET_V_IFACE_CURRENT(GetEngineFactory, cvar, ICvar, CVAR_INTERFACE_VERSION);
+	GET_V_IFACE_CURRENT(GetEngineFactory, gameeventmanager, IGameEventManager2, INTERFACEVERSION_GAMEEVENTSMANAGER2);
 	g_pCVar = cvar;
 	ConVar_Register(0, this);
 
 	skill = g_pCVar->FindVar("skill");
 	skill->SetValue(SKILL_MEDIUM);
 
+#if SOURCE_ENGINE == SE_TF2
 	tf_mvm_skill = g_pCVar->FindVar("tf_mvm_skill");
 	tf_mvm_skill->SetValue(3);
+#endif
 
 	skill->InstallChangeCallback(skill_changed);
+#if SOURCE_ENGINE == SE_TF2
 	tf_mvm_skill->InstallChangeCallback(mvm_skill_changed);
+#endif
 
 	return true;
 }
@@ -811,48 +1031,6 @@ CBaseEntity * FindEntityByServerClassname(int iStart, const char * pServerClassN
 	return nullptr;
 }
 
-int CBaseEntityIsNPC = -1;
-int CBaseEntityMyCombatCharacterPointer = -1;
-
-class CBasePlayer;
-class CBaseCombatCharacter;
-
-int CBaseEntityOnTakeDamageOffset = -1;
-void *CBasePlayerOnTakeDamagePtr = nullptr;
-
-class CBaseEntity : public IServerEntity
-{
-public:
-	CBasePlayer *IsPlayer()
-	{
-		int idx = gamehelpers->EntityToBCompatRef(this);
-		if(idx >= 1 && idx <= playerhelpers->GetNumPlayers()) {
-			return (CBasePlayer *)this;
-		} else {
-			return nullptr;
-		}
-	}
-
-	bool IsNPC()
-	{
-		return call_vfunc<bool>(this, CBaseEntityIsNPC);
-	}
-
-	CBaseCombatCharacter *MyCombatCharacterPointer()
-	{
-		return call_vfunc<CBaseCombatCharacter *>(this, CBaseEntityMyCombatCharacterPointer);
-	}
-};
-
-class CBasePlayer : public CBaseEntity
-{
-public:
-	int OnTakeDamage( const CTakeDamageInfo &info )
-	{
-		return call_mfunc<int, CBasePlayer, const CTakeDamageInfo &>(this, CBasePlayerOnTakeDamagePtr, info);
-	}
-};
-
 static bool gamerules_vtable_assigned{false};
 
 // Controls the application of the robus radius damage model.
@@ -867,14 +1045,6 @@ ConVar	sk_dmg_inflict_scale3( "sk_dmg_inflict_scale3", "0.75", FCVAR_REPLICATED 
 ConVar	sk_dmg_take_scale1( "sk_dmg_take_scale1", "0.50", FCVAR_REPLICATED );
 ConVar	sk_dmg_take_scale2( "sk_dmg_take_scale2", "1.00", FCVAR_REPLICATED );
 ConVar	sk_dmg_take_scale3( "sk_dmg_take_scale3", "2.0", FCVAR_REPLICATED );
-
-int CGameRulesAdjustPlayerDamageTaken = -1;
-int CGameRulesAdjustPlayerDamageInflicted = -1;
-int CGameRulesShouldUseRobustRadiusDamage = -1;
-int CGameRulesGetAmmoDamageOffset = -1;
-void *CGameRulesGetAmmoDamagePtr = nullptr;
-
-int CGameRulesGetSkillLevel = -1;
 
 class CAmmoDef
 #ifdef __HAS_WPNHACK
@@ -907,30 +1077,6 @@ CAmmoDef *GetAmmoDef()
 	return nullptr;
 #endif
 }
-
-class CGameRules
-{
-public:
-	int GetSkillLevel()
-	{
-		return call_vfunc<int>(this, CGameRulesGetSkillLevel);
-	}
-
-	float GetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
-	{
-		return call_mfunc<float, CGameRules, CBaseEntity *, CBaseEntity *, int>(this, CGameRulesGetAmmoDamagePtr, pAttacker, pVictim, nAmmoType);
-	}
-
-	float AdjustPlayerDamageInflicted( float damage )
-	{
-		return call_vfunc<float, CGameRules, float>(this, CGameRulesAdjustPlayerDamageInflicted, damage);
-	}
-
-	void  AdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
-	{
-		call_vfunc<void, CGameRules, CTakeDamageInfo *>(this, CGameRulesAdjustPlayerDamageTaken, pInfo);
-	}
-};
 
 class GameRulesVTableHack
 {
@@ -1063,10 +1209,10 @@ void CTakeDamageInfo::AdjustPlayerDamageTakenForSkillLevel()
 	g_pGameRules->AdjustPlayerDamageTaken(this);
 }
 
-class PlayerVTableHack
+class PlayerVTableHack : public CBasePlayer
 {
 public:
-	int OnTakeDamage( const CTakeDamageInfo &info )
+	int DetourOnTakeDamage( const CTakeDamageInfo &info )
 	{
 		CBasePlayer *pThis = (CBasePlayer *)this;
 
@@ -1088,22 +1234,161 @@ public:
 			playerDamage.AdjustPlayerDamageTakenForSkillLevel();
 		}
 
-		return pThis->OnTakeDamage( playerDamage );
+		return CBasePlayer::OnTakeDamage( playerDamage );
 	}
 };
 
-void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname)
+void ModifyDamage( CTakeDamageInfo *info )
 {
-	if(strcmp(classname, "player") == 0) {
+
+}
+
+int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
+{
+	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
+
+	CTakeDamageInfo info = rawInfo;
+
+#if SOURCE_ENGINE == SE_TF2
+	if ( g_pGameRules )
+	{
+		((CTFGameRules *)g_pGameRules)->ApplyOnDamageModifyRules( info, pThis, true );
+	}
+
+	// On damage Rage
+	// Give the soldier/pyro some rage points for dealing/taking damage.
+	if ( info.GetDamage() && info.GetAttacker() != pThis )
+	{
+		CTFPlayer *pAttacker = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+
+		// Buff flag 1: we get rage when we deal damage. Here, that means the soldier that attacked
+		// gets rage when we take damage.
+		HandleRageGain( pAttacker, kRageBuffFlag_OnDamageDealt, info.GetDamage(), 6.0f );
+
+		// Buff 5: our pyro attacker get rage when we're damaged by fire
+		if ( ( info.GetDamageType() & DMG_BURN ) != 0 || ( info.GetDamageType() & DMG_PLASMA ) != 0 )
+		{
+			HandleRageGain( pAttacker, kRageBuffFlag_OnBurnDamageDealt, info.GetDamage(), 30.f );
+		}
+
+		if ( pAttacker && info.GetWeapon() )
+		{
+			CTFWeaponBase *pWeapon = (CTFWeaponBase *)info.GetWeapon();
+			if ( pWeapon )
+			{
+				pWeapon->ApplyOnHitAttributes( pThis, pAttacker, info );
+			}
+		}
+	}
+#endif
+
+	int result = SH_MCALL(pThis, OnTakeDamage)( info );
+	RETURN_META_VALUE(MRES_SUPERCEDE, result);
+}
+
+int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
+{
+	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
+
+	if ( !rawInfo.GetAttacker() || rawInfo.GetAttacker()->GetTeamNumber() == pThis->GetTeamNumber() )
+	{
+		// no friendly fire damage
+		RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+	}
+
+	CTakeDamageInfo info = rawInfo;
+
+	// weapon-specific damage modification
+	ModifyDamage( &info );
+
+#if SOURCE_ENGINE == SE_TF2
+	if ( g_pGameRules )
+	{
+		DamageModifyExtras_t outParams;
+		info.SetDamage( ((CTFGameRules *)g_pGameRules)->ApplyOnDamageAliveModifyRules( info, pThis, outParams ) );
+	}
+#endif
+
+	// fire event for client combat text, beep, etc.
+	IGameEvent *event = gameeventmanager->CreateEvent( "npc_hurt" );
+	if ( event )
+	{
+
+		event->SetInt( "entindex", pThis->entindex() );
+		event->SetInt( "health", MAX( 0, pThis->GetHealth() ) );
+		event->SetInt( "damageamount", info.GetDamage() );
+		event->SetBool( "crit", ( info.GetDamageType() & DMG_CRITICAL ) ? true : false );
+
+		CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+		if ( attackerPlayer )
+		{
+			event->SetInt( "attacker_player", attackerPlayer->GetUserID() );
+
+			if ( attackerPlayer->GetActiveTFWeapon() )
+			{
+				event->SetInt( "weaponid", attackerPlayer->GetActiveTFWeapon()->GetWeaponID() );
+			}
+			else
+			{
+				event->SetInt( "weaponid", 0 );
+			}
+		}
+		else
+		{
+			// hurt by world
+			event->SetInt( "attacker_player", 0 );
+			event->SetInt( "weaponid", 0 );
+		}
+
+		event->SetInt( "boss", ((CBaseCombatCharacter *)pThis)->GetBossType() );
+
+		gameeventmanager->FireEvent( event );
+	}
+
+	int result = SH_MCALL(pThis, OnTakeDamageAlive)( info );
+
+#if SOURCE_ENGINE == SE_TF2
+	// Let attacker react to the damage they dealt
+	CTFPlayer *pAttacker = (CTFPlayer *)rawInfo.GetAttacker()->IsPlayer();
+	if ( pAttacker )
+	{
+		pAttacker->OnDealtDamage( (CBaseCombatCharacter *)pThis, info );
+	}
+#endif
+
+	RETURN_META_VALUE(MRES_SUPERCEDE, result);
+}
+
+void hook_npc_dtor()
+{
+	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
+
+	SH_REMOVE_MANUALHOOK(GenericDtor, pThis, SH_STATIC(hook_npc_dtor), false);
+	SH_REMOVE_MANUALHOOK(OnTakeDamage, pThis, SH_STATIC(hook_npc_takedamage), false);
+	SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pThis, SH_STATIC(hook_npc_takedamagealive), false);
+}
+
+void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
+{
+	std::string classname{classname_ptr};
+
+	if(classname == "player"sv) {
 		if(!player_vtable_assgined) {
 			void **vtabl = *(void ***)pEntity;
 
 			SourceHook::SetMemAccess(vtabl, (CGameRulesAdjustPlayerDamageTaken * sizeof(void *)) + 4, SH_MEM_READ|SH_MEM_WRITE|SH_MEM_EXEC);
 
 			CBasePlayerOnTakeDamagePtr = vtabl[CBaseEntityOnTakeDamageOffset];
-			vtabl[CBaseEntityOnTakeDamageOffset] = func_to_void(&PlayerVTableHack::OnTakeDamage);
+			vtabl[CBaseEntityOnTakeDamageOffset] = func_to_void(&PlayerVTableHack::DetourOnTakeDamage);
 
 			player_vtable_assgined = true;
+		}
+	} else {
+		npc_type ntype{g_pNextBot->entity_to_npc_type(pEntity, classname)};
+		if(ntype & npc_custom) {
+			SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_STATIC(hook_npc_dtor), false);
+			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
+			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_STATIC(hook_npc_takedamagealive), false);
 		}
 	}
 }
@@ -1115,7 +1400,10 @@ void Sample::SDK_OnAllLoaded()
 #ifdef __HAS_WPNHACK
 	SM_GET_LATE_IFACE(WPNHACK, g_pWpnHack);
 #endif
-	
+#ifdef __HAS_WPNHACK
+	SM_GET_LATE_IFACE(NEXTBOT, g_pNextBot);
+#endif
+
 	g_pSDKHooks->AddEntityListener(this);
 }
 
@@ -1133,6 +1421,10 @@ bool Sample::QueryInterfaceDrop(SMInterface *pInterface)
 	else if(pInterface == g_pWpnHack)
 		return false;
 #endif
+#ifdef __HAS_NEXTBOT
+	else if(pInterface == g_pNextBot)
+		return false;
+#endif
 	return IExtensionInterface::QueryInterfaceDrop(pInterface);
 }
 
@@ -1147,6 +1439,12 @@ void Sample::NotifyInterfaceDrop(SMInterface *pInterface)
 	else if(strcmp(pInterface->GetInterfaceName(), SMINTERFACE_WPNHACK_NAME) == 0)
 	{
 		g_pWpnHack = NULL;
+	}
+#endif
+#ifdef __HAS_NEXTBOT
+	else if(strcmp(pInterface->GetInterfaceName(), SMINTERFACE_NEXTBOT_NAME) == 0)
+	{
+		g_pNextBot = NULL;
 	}
 #endif
 }
@@ -1177,14 +1475,15 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
+
+	g_pGameConf->GetOffset("CTFWeaponBase::GetWeaponID", &CTFWeaponBaseGetWeaponID);
 #endif
 	
-	int offset = -1;
 	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamageOffset, 0, 0);
 	
-	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &offset);
-	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, offset, 0, 0);
+	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseEntityOnTakeDamage_AliveOffset);
+	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseEntityOnTakeDamage_AliveOffset, 0, 0);
 	
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetMemSig("HandleRageGain", &HandleRageGainPtr);
@@ -1193,8 +1492,16 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
 #endif
 	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
-	
+
+#if SOURCE_ENGINE == SE_TF2
+	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
+#endif
+
 	gameconfs->CloseGameConfigFile(g_pGameConf);
+
+	sm_sendprop_info_t info{};
+	gamehelpers->FindSendPropInfo("CBaseEntity", "m_iTeamNum", &info);
+	m_iTeamNumOffset = info.actual_offset;
 
 	g_pEntityList = reinterpret_cast<CBaseEntityList *>(gamehelpers->GetGlobalEntityList());
 
@@ -1205,6 +1512,9 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	
 	plsys->AddPluginsListener(this);
 
+#ifdef __HAS_NEXTBOT
+	sharesys->AddDependency(myself, "nextbot.ext", false, true);
+#endif
 #ifdef __HAS_WPNHACK
 	sharesys->AddDependency(myself, "wpnhack.ext", false, true);
 #endif
