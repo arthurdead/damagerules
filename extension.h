@@ -43,7 +43,6 @@
 #include <ISDKHooks.h>
 
 #include <public/IDamageRules.h>
-#include <public/damageinfo.cpp>
 
 /**
  * @brief Sample implementation of the SDK Extension.

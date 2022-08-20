@@ -51,6 +51,10 @@ using namespace std::literals::string_view_literals;
 
 #include "extension.h"
 
+#include <public/damageinfo.cpp>
+
+#include <CDetour/detours.h>
+
 #include <server_class.h>
 #include <eiface.h>
 #include <shareddefs.h>
@@ -59,6 +63,15 @@ using namespace std::literals::string_view_literals;
 #endif
 
 #include <igameevents.h>
+#include <toolframework/itoolentity.h>
+
+#ifndef FMTFUNCTION
+#define FMTFUNCTION(...)
+#endif
+
+#include <util.h>
+#include <ServerNetworkProperty.h>
+#include <tier1/checksum_crc.h>
 
 /**
  * @file extension.cpp
@@ -73,6 +86,11 @@ ISDKTools *g_pSDKTools = nullptr;
 ISDKHooks *g_pSDKHooks = nullptr;
 IServerGameEnts *gameents = nullptr;
 IGameEventManager2 *gameeventmanager = nullptr;
+INetworkStringTableContainer *netstringtables = NULL;
+CGlobalVars *gpGlobals = nullptr;
+INetworkStringTable *m_pUserInfoTable = nullptr;
+IServerTools *servertools = nullptr;
+IEntityFactoryDictionary *dictionary = nullptr;
 #ifdef __HAS_WPNHACK
 IWpnHack *g_pWpnHack = nullptr;
 #endif
@@ -143,6 +161,14 @@ void *func_to_void(T ptr)
 	return p;
 }
 
+template <typename T>
+int vfunc_index(T func)
+{
+	SourceHook::MemFuncInfo info{};
+	SourceHook::GetFuncInfo<T>(func, info);
+	return info.vtblindex;
+}
+
 #if SOURCE_ENGINE == SE_TF2
 struct DamageModifyExtras_t
 {
@@ -191,6 +217,7 @@ void *CBasePlayerOnTakeDamagePtr = nullptr;
 int m_iTeamNumOffset = -1;
 int m_iHealthOffset = -1;
 int m_hActiveWeaponOffset = -1;
+int m_iNameOffset = -1;
 
 class CBaseEntity : public IServerEntity
 {
@@ -198,6 +225,28 @@ public:
 	int entindex()
 	{
 		return gamehelpers->EntityToBCompatRef(this);
+	}
+
+	edict_t *edict()
+	{
+		return GetNetworkable()->GetEdict();
+	}
+
+	const char *GetClassname()
+	{
+		return gamehelpers->GetEntityClassname(this);
+	}
+
+	const char *GetName()
+	{
+		if(m_iNameOffset == -1) {
+			datamap_t *map = gamehelpers->GetDataMap(this);
+			sm_datatable_info_t info{};
+			gamehelpers->FindDataMapInfo(map, "m_iName", &info);
+			m_iNameOffset = info.actual_offset;
+		}
+
+		return STRING( *(string_t *)(((unsigned char *)this) + m_iNameOffset) );
 	}
 
 	CBasePlayer *IsPlayer()
@@ -225,6 +274,11 @@ public:
 		return *(int *)(((unsigned char *)this) + m_iTeamNumOffset);
 	}
 
+	void SetTeamNumber_nonetwork(int team)
+	{
+		*(int *)(((unsigned char *)this) + m_iTeamNumOffset) = team;
+	}
+
 	int GetHealth()
 	{
 		if(m_iHealthOffset == -1) {
@@ -237,6 +291,13 @@ public:
 		return *(int *)(((unsigned char *)this) + m_iHealthOffset);
 	}
 };
+
+void SetEdictStateChanged(CBaseEntity *pEntity, int offset)
+{
+	IServerNetworkable *pNet = pEntity->GetNetworkable();
+	edict_t *edict = pNet->GetEdict();
+	gamehelpers->SetEdictStateChanged(edict, offset);
+}
 
 int CBaseCombatCharacterGetBossType = -1;
 
@@ -364,8 +425,19 @@ public:
 	}
 };
 
+int CMultiplayRulesDeathNotice = -1;
+
+class CMultiplayRules : public CGameRules
+{
+public:
+	void DeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info)
+	{
+		call_vfunc<void, CMultiplayRules, CBasePlayer *, const CTakeDamageInfo &>(this, CMultiplayRulesDeathNotice, pVictim, info);
+	}
+};
+
 #if SOURCE_ENGINE == SE_TF2
-class CTFGameRules : public CGameRules
+class CTFGameRules : public CMultiplayRules
 {
 public:
 	bool ApplyOnDamageModifyRules( CTakeDamageInfo &info, CBaseEntity *pVictimBaseEntity, bool bAllowDamage )
@@ -377,6 +449,12 @@ public:
 	{
 		return call_mfunc<float, CTFGameRules, const CTakeDamageInfo &, CBaseEntity *, DamageModifyExtras_t &>(this, CTFGameRulesApplyOnDamageAliveModifyRules, info, pVictimBaseEntity, outParams);
 	}
+};
+
+class CPlayerResource : public CBaseEntity
+{
+public:
+
 };
 #endif
 
@@ -924,13 +1002,6 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 	}
 }
 
-const char *g_szGameRulesProxy = nullptr;
-
-void Sample::OnCoreMapEnd()
-{
-	g_pGameRulesProxyEntity = nullptr;
-}
-
 ConVar *skill = nullptr;
 bool ignore_skill_change = false;
 #if SOURCE_ENGINE == SE_TF2
@@ -980,29 +1051,9 @@ void mvm_skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 }
 #endif
 
-bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
-{
-	GET_V_IFACE_ANY(GetServerFactory, gameents, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
-	GET_V_IFACE_CURRENT(GetEngineFactory, cvar, ICvar, CVAR_INTERFACE_VERSION);
-	GET_V_IFACE_CURRENT(GetEngineFactory, gameeventmanager, IGameEventManager2, INTERFACEVERSION_GAMEEVENTSMANAGER2);
-	g_pCVar = cvar;
-	ConVar_Register(0, this);
+static size_t player_size{0};
 
-	skill = g_pCVar->FindVar("skill");
-	skill->SetValue(SKILL_MEDIUM);
-
-#if SOURCE_ENGINE == SE_TF2
-	tf_mvm_skill = g_pCVar->FindVar("tf_mvm_skill");
-	tf_mvm_skill->SetValue(3);
-#endif
-
-	skill->InstallChangeCallback(skill_changed);
-#if SOURCE_ENGINE == SE_TF2
-	tf_mvm_skill->InstallChangeCallback(mvm_skill_changed);
-#endif
-
-	return true;
-}
+SH_DECL_HOOK1(IVEngineServer, GetPlayerUserId, SH_NOATTRIB, 0, int, const edict_t *)
 
 bool Sample::RegisterConCommandBase(ConCommandBase *pCommand)
 {
@@ -1173,10 +1224,134 @@ public:
 
 #include <sourcehook/sh_memory.h>
 
+static int player_manager_ref = INVALID_EHANDLE_INDEX;
+
+#define PLAYER_BLOCK_USERID 999
+#define PLAYER_BLOCK_CLIENT_IDX (playerhelpers->GetMaxClients()-1)
+#define PLAYER_BLOCK_ENTITY_IDX (PLAYER_BLOCK_CLIENT_IDX+1)
+
+static void *player_block{nullptr};
+static void **player_block_vtable{nullptr};
+
+const char *g_szGameRulesProxy = nullptr;
+
+int CBaseEntityIsPlayer = -1;
+int CBaseEntityGetNetworkableOffset = -1;
+void *CBaseEntityGetNetworkable = nullptr;
+
+class PlayerBlockVTable
+{
+public:
+	bool IsPlayer()
+	{
+		return true;
+	}
+};
+
+typedef struct player_info_s
+{
+	DECLARE_BYTESWAP_DATADESC();
+	// scoreboard information
+	char			name[MAX_PLAYER_NAME_LENGTH];
+	// local server user ID, unique while server is running
+	int				userID;
+	// global unique player identifer
+	char			guid[SIGNED_GUID_LEN + 1];
+	// friends identification number
+	uint32			friendsID;
+	// friends name
+	char			friendsName[MAX_PLAYER_NAME_LENGTH];
+	// true, if player is a bot controlled by game.dll
+	bool			fakeplayer;
+	// true if player is the HLTV proxy
+	bool			ishltv;
+#if SOURCE_ENGINE == SE_TF2
+	// true if player is the Replay proxy
+	bool			isreplay;
+#endif
+	// custom files CRC for this player
+	CRC32_t			customFiles[MAX_CUSTOM_FILES];
+	// this counter increases each time the server downloaded a new file
+	unsigned char	filesDownloaded;
+} player_info_t;
+
+BEGIN_BYTESWAP_DATADESC( player_info_s )
+	DEFINE_ARRAY( name, FIELD_CHARACTER, MAX_PLAYER_NAME_LENGTH ),
+	DEFINE_FIELD( userID, FIELD_INTEGER ),
+	DEFINE_ARRAY( guid, FIELD_CHARACTER, SIGNED_GUID_LEN + 1 ),
+	DEFINE_FIELD( friendsID, FIELD_INTEGER ),
+	DEFINE_ARRAY( friendsName, FIELD_CHARACTER, MAX_PLAYER_NAME_LENGTH ),
+	DEFINE_FIELD( fakeplayer, FIELD_BOOLEAN ),
+	DEFINE_FIELD( ishltv, FIELD_BOOLEAN ),
+#if SOURCE_ENGINE == SE_TF2
+	DEFINE_FIELD( isreplay, FIELD_BOOLEAN ),
+#endif
+	DEFINE_ARRAY( customFiles, FIELD_INTEGER, MAX_CUSTOM_FILES ),
+	DEFINE_FIELD( filesDownloaded, FIELD_INTEGER ),
+END_BYTESWAP_DATADESC()
+
+struct playerblock_info_t : public player_info_t
+{
+	playerblock_info_t()
+	{
+		strncpy(name, "ERRORNAME", MAX_PLAYER_NAME_LENGTH);
+		guid[0] = '\0';
+		friendsID = 0;
+		friendsName[0] = '\0';
+		fakeplayer = true;
+		ishltv = false;
+		isreplay = false;
+		for(int i = 0; i < MAX_CUSTOM_FILES; ++i) {
+			customFiles[i] = 0;
+		}
+		filesDownloaded = 0;
+		userID = PLAYER_BLOCK_USERID;
+	}
+};
+
+static playerblock_info_t playerblock_info{};
+
+void init_playerblock_userinfo()
+{
+	CByteswap byteswap;
+	byteswap.SetTargetBigEndian( false );
+	byteswap.SwapFieldsToTargetEndian( &playerblock_info );
+
+	bool oldlock = engine->LockNetworkStringTables(false);
+	m_pUserInfoTable->SetStringUserData( PLAYER_BLOCK_CLIENT_IDX, sizeof(player_info_t), &playerblock_info );
+	m_pUserInfoTable->SetTick(gpGlobals->tickcount);
+	engine->LockNetworkStringTables(oldlock);
+}
+
+void update_playerblock_userinfo(const char *name)
+{
+	strncpy(playerblock_info.name, name, MAX_PLAYER_NAME_LENGTH);
+
+	CByteswap byteswap;
+	byteswap.SetTargetBigEndian( false );
+	byteswap.SwapFieldsToTargetEndian( &playerblock_info );
+
+	bool oldlock = engine->LockNetworkStringTables(false);
+	m_pUserInfoTable->SetStringUserData( PLAYER_BLOCK_CLIENT_IDX, sizeof(player_info_t), &playerblock_info );
+	m_pUserInfoTable->SetTick(gpGlobals->tickcount);
+	engine->LockNetworkStringTables(oldlock);
+}
+
 void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 {
+	CBaseEntity *pEntity = servertools->FindEntityByClassname(nullptr, "player_manager");
+	if(pEntity) {
+		player_manager_ref = gamehelpers->EntityToBCompatRef(pEntity);
+	}
+
 	g_pGameRulesProxyEntity = FindEntityByServerClassname(0, g_szGameRulesProxy);
 	g_pGameRules = (CGameRules *)g_pSDKTools->GetGameRules();
+
+	if(!CBaseEntityGetNetworkable) {
+		void **vtabl = *(void ***)g_pGameRulesProxyEntity;
+
+		CBaseEntityGetNetworkable = vtabl[CBaseEntityGetNetworkableOffset];
+	}
 
 	if(!gamerules_vtable_assigned) {
 		if(g_pGameRules) {
@@ -1193,6 +1368,40 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 			gamerules_vtable_assigned = true;
 		}
 	}
+
+	{
+		if(!player_block_vtable) {
+			player_block_vtable = new void *[CBaseEntityIsPlayer];
+
+			player_block_vtable[CBaseEntityGetNetworkableOffset] = CBaseEntityGetNetworkable;
+			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
+		}
+
+		if(!player_block) {
+			player_block = engine->PvAllocEntPrivateData(player_size);
+			*(void ***)player_block = player_block_vtable;
+		}
+	}
+
+	init_playerblock_userinfo();
+}
+
+bool in_npc_death_notice = false;
+edict_t *npc_edict{nullptr};
+
+int hook_getuserid(const edict_t *e)
+{
+	if(in_npc_death_notice && e == npc_edict) {
+		RETURN_META_VALUE(MRES_SUPERCEDE, PLAYER_BLOCK_USERID);
+	}
+
+	RETURN_META_VALUE(MRES_IGNORED, 0);
+}
+
+void Sample::OnCoreMapEnd()
+{
+	g_pGameRulesProxyEntity = nullptr;
+	player_manager_ref = INVALID_EHANDLE_INDEX;
 }
 
 static bool player_vtable_assgined{false};
@@ -1238,6 +1447,8 @@ public:
 	}
 };
 
+SH_DECL_MANUALHOOK1_void(Event_Killed, 0, 0, 0, const CTakeDamageInfo &)
+
 void ModifyDamage( CTakeDamageInfo *info )
 {
 
@@ -1246,6 +1457,15 @@ void ModifyDamage( CTakeDamageInfo *info )
 int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
+
+	{
+	//TODO!!!! find another way to update instead of spam
+		const char *name{pThis->GetName()};
+		if(!name || name[0] == '\0') {
+			name = pThis->GetClassname();
+		}
+		update_playerblock_userinfo(name);
+	}
 
 	CTakeDamageInfo info = rawInfo;
 
@@ -1359,6 +1579,127 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
 
+struct npc_death_notice_info_t
+{
+	bool sending{false};
+	float time{0.0f};
+
+	int m_bConnected_offset{-1};
+	int m_bValid_offset{-1};
+
+	bool sending_team{false};
+	int team{0};
+	float team_time{0.0f};
+
+	int m_iTeam_offset{-1};
+};
+
+npc_death_notice_info_t npc_death_notice_info{};
+
+SendVarProxyFn real_proxy_connected{nullptr};
+static void fake_proxy_connected(const SendProp *pProp, const void *pStructBase, const void *pData, DVariant *pOut, int iElement, int objectID)
+{
+	if(npc_death_notice_info.sending) {
+		bool connected{true};
+		real_proxy_connected(pProp, pStructBase, &connected, pOut, iElement, objectID);
+	} else {
+		real_proxy_connected(pProp, pStructBase, pData, pOut, iElement, objectID);
+	}
+}
+
+SendVarProxyFn real_proxy_valid{nullptr};
+static void fake_proxy_valid(const SendProp *pProp, const void *pStructBase, const void *pData, DVariant *pOut, int iElement, int objectID)
+{
+	if(npc_death_notice_info.sending) {
+		bool valid{true};
+		real_proxy_valid(pProp, pStructBase, &valid, pOut, iElement, objectID);
+	} else {
+		real_proxy_valid(pProp, pStructBase, pData, pOut, iElement, objectID);
+	}
+}
+
+SendVarProxyFn real_proxy_team{nullptr};
+static void fake_proxy_team(const SendProp *pProp, const void *pStructBase, const void *pData, DVariant *pOut, int iElement, int objectID)
+{
+	if(npc_death_notice_info.sending_team) {
+		real_proxy_team(pProp, pStructBase, &npc_death_notice_info.team, pOut, iElement, objectID);
+	} else {
+		real_proxy_team(pProp, pStructBase, pData, pOut, iElement, objectID);
+	}
+}
+
+void game_frame(bool simulating)
+{
+	if(!simulating) {
+		return;
+	}
+
+	if(npc_death_notice_info.sending) {
+		if(npc_death_notice_info.time < gpGlobals->curtime) {
+			npc_death_notice_info.sending = false;
+			npc_death_notice_info.time = 0.0f;
+		} else {
+			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
+			if(pEntity) {
+				SetEdictStateChanged(pEntity, npc_death_notice_info.m_bConnected_offset);
+				SetEdictStateChanged(pEntity, npc_death_notice_info.m_bValid_offset);
+			}
+		}
+	}
+
+	if(npc_death_notice_info.sending_team) {
+		if(npc_death_notice_info.team_time < gpGlobals->curtime) {
+			npc_death_notice_info.sending_team = false;
+			npc_death_notice_info.team = 0;
+			npc_death_notice_info.team_time = 0.0f;
+		} else {
+			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
+			if(pEntity) {
+				SetEdictStateChanged(pEntity, npc_death_notice_info.m_iTeam_offset);
+			}
+		}
+	}
+}
+
+void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info)
+{
+	in_npc_death_notice = true;
+	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+	npc_edict = pVictim->edict();
+	m_Network->SetEdict(npc_edict);
+	const char *name{pVictim->GetName()};
+	if(!name || name[0] == '\0') {
+		name = pVictim->GetClassname();
+	}
+	update_playerblock_userinfo(name);
+	int team = pVictim->GetTeamNumber();
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	npc_death_notice_info.sending = true;
+	npc_death_notice_info.time = gpGlobals->curtime + 1.0f;
+	npc_death_notice_info.sending_team = true;
+	npc_death_notice_info.team_time = gpGlobals->curtime + 6.0f;
+	npc_death_notice_info.team = team;
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
+	if(pEntity) {
+		SetEdictStateChanged(pEntity, npc_death_notice_info.m_bConnected_offset);
+		SetEdictStateChanged(pEntity, npc_death_notice_info.m_bValid_offset);
+		SetEdictStateChanged(pEntity, npc_death_notice_info.m_iTeam_offset);
+	}
+	((CMultiplayRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info);
+	m_Network->SetEdict(nullptr);
+	npc_edict = nullptr;
+	in_npc_death_notice = false;
+}
+
+void hook_npc_killed(const CTakeDamageInfo &info)
+{
+	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
+
+	NPCDeathNotice(pThis, info);
+
+	RETURN_META(MRES_HANDLED);
+}
+
 void hook_npc_dtor()
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
@@ -1366,6 +1707,7 @@ void hook_npc_dtor()
 	SH_REMOVE_MANUALHOOK(GenericDtor, pThis, SH_STATIC(hook_npc_dtor), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamage, pThis, SH_STATIC(hook_npc_takedamage), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pThis, SH_STATIC(hook_npc_takedamagealive), false);
+	SH_REMOVE_MANUALHOOK(Event_Killed, pThis, SH_STATIC(hook_npc_killed), true);
 }
 
 void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
@@ -1389,6 +1731,7 @@ void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
 			SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_STATIC(hook_npc_dtor), false);
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
 			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_STATIC(hook_npc_takedamagealive), false);
+			SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_STATIC(hook_npc_killed), true);
 		}
 	}
 }
@@ -1449,15 +1792,55 @@ void Sample::NotifyInterfaceDrop(SMInterface *pInterface)
 #endif
 }
 
-void Sample::SDK_OnUnload()
+IGameConfig *g_pGameConf = nullptr;
+
+CDetour *pSW_GameStats_WriteKill = nullptr;
+
+DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer*, pVictim, CTFPlayer*, pAssister, IGameEvent*, event, const CTakeDamageInfo &,info )
 {
-	g_pSDKHooks->RemoveEntityListener(this);
-	plsys->RemovePluginsListener(this);
+	if(in_npc_death_notice) {
+		return;
+	}
+
+	DETOUR_MEMBER_CALL(SW_GameStats_WriteKill)(pKiller, pVictim, pAssister, event, info);
+}
+
+bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
+{
+	gpGlobals = ismm->GetCGlobals();
+	GET_V_IFACE_ANY(GetServerFactory, gameents, IServerGameEnts, INTERFACEVERSION_SERVERGAMEENTS);
+	GET_V_IFACE_CURRENT(GetEngineFactory, cvar, ICvar, CVAR_INTERFACE_VERSION);
+	GET_V_IFACE_CURRENT(GetEngineFactory, gameeventmanager, IGameEventManager2, INTERFACEVERSION_GAMEEVENTSMANAGER2);
+	GET_V_IFACE_CURRENT(GetServerFactory, servertools, IServerTools, VSERVERTOOLS_INTERFACE_VERSION);
+	GET_V_IFACE_ANY(GetEngineFactory, netstringtables, INetworkStringTableContainer, INTERFACENAME_NETWORKSTRINGTABLESERVER)
+	g_pCVar = cvar;
+	ConVar_Register(0, this);
+
+	SH_ADD_HOOK(IVEngineServer, GetPlayerUserId, engine, SH_STATIC(hook_getuserid), false);
+
+	dictionary = servertools->GetEntityFactoryDictionary();
+	player_size = dictionary->FindFactory("player")->GetEntitySize();
+
+	m_pUserInfoTable = netstringtables->FindTable("userinfo");
+
+	skill = g_pCVar->FindVar("skill");
+	skill->SetValue(SKILL_MEDIUM);
+
+#if SOURCE_ENGINE == SE_TF2
+	tf_mvm_skill = g_pCVar->FindVar("tf_mvm_skill");
+	tf_mvm_skill->SetValue(3);
+#endif
+
+	skill->InstallChangeCallback(skill_changed);
+#if SOURCE_ENGINE == SE_TF2
+	tf_mvm_skill->InstallChangeCallback(mvm_skill_changed);
+#endif
+
+	return true;
 }
 
 bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 {
-	IGameConfig *g_pGameConf = nullptr;
 	gameconfs->LoadGameConfigFile("sdktools.games", &g_pGameConf, nullptr, 0);
 	
 	g_szGameRulesProxy = g_pGameConf->GetKeyValue("GameRulesProxy");
@@ -1466,12 +1849,19 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	
 	gameconfs->LoadGameConfigFile("damagerules", &g_pGameConf, nullptr, 0);
 
+	CDetourManager::Init(g_pSM->GetScriptingEngine(), g_pGameConf);
+
+	pSW_GameStats_WriteKill = DETOUR_CREATE_MEMBER(SW_GameStats_WriteKill, "CTFGameStats::SW_GameStats_WriteKill")
+	pSW_GameStats_WriteKill->EnableDetour();
+
 	g_pGameConf->GetOffset("CBaseEntity::IsNPC", &CBaseEntityIsNPC);
 	g_pGameConf->GetOffset("CGameRules::GetSkillLevel", &CGameRulesGetSkillLevel);
 	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageTaken", &CGameRulesAdjustPlayerDamageTaken);
 	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageInflicted", &CGameRulesAdjustPlayerDamageInflicted);
 	g_pGameConf->GetOffset("CGameRules::ShouldUseRobustRadiusDamage", &CGameRulesShouldUseRobustRadiusDamage);
 	g_pGameConf->GetOffset("CGameRules::GetAmmoDamage", &CGameRulesGetAmmoDamageOffset);
+
+	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNotice);
 
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
@@ -1497,13 +1887,42 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
 #endif
 
-	gameconfs->CloseGameConfigFile(g_pGameConf);
+	int offset = -1;
+	g_pGameConf->GetOffset("CBaseCombatCharacter::Event_Killed", &offset);
+	SH_MANUALHOOK_RECONFIGURE(Event_Killed, offset, 0, 0);
+
+	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
+
+	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
 
 	sm_sendprop_info_t info{};
 	gamehelpers->FindSendPropInfo("CBaseEntity", "m_iTeamNum", &info);
 	m_iTeamNumOffset = info.actual_offset;
 
+	gamehelpers->FindSendPropInfo("CPlayerResource", "m_bConnected", &info);
+	npc_death_notice_info.m_bConnected_offset = info.actual_offset;
+	SendTable *pPropTable{info.prop->GetDataTable()};
+	SendProp *pChildProp{pPropTable->GetProp(PLAYER_BLOCK_ENTITY_IDX)};
+	real_proxy_connected = pChildProp->GetProxyFn();
+	pChildProp->SetProxyFn(fake_proxy_connected);
+
+	gamehelpers->FindSendPropInfo("CPlayerResource", "m_bValid", &info);
+	npc_death_notice_info.m_bValid_offset = info.actual_offset;
+	pPropTable = info.prop->GetDataTable();
+	pChildProp = pPropTable->GetProp(PLAYER_BLOCK_ENTITY_IDX);
+	real_proxy_valid = pChildProp->GetProxyFn();
+	pChildProp->SetProxyFn(fake_proxy_valid);
+
+	gamehelpers->FindSendPropInfo("CPlayerResource", "m_iTeam", &info);
+	npc_death_notice_info.m_iTeam_offset = info.actual_offset;
+	pPropTable = info.prop->GetDataTable();
+	pChildProp = pPropTable->GetProp(PLAYER_BLOCK_ENTITY_IDX);
+	real_proxy_team = pChildProp->GetProxyFn();
+	pChildProp->SetProxyFn(fake_proxy_team);
+
 	g_pEntityList = reinterpret_cast<CBaseEntityList *>(gamehelpers->GetGlobalEntityList());
+
+	smutils->AddGameFrameHook(game_frame);
 
 	sharesys->AddDependency(myself, "sdkhooks.ext", true, true);
 	
@@ -1522,4 +1941,16 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	sharesys->RegisterLibrary(myself, "damagerules");
 
 	return true;
+}
+
+void Sample::SDK_OnUnload()
+{
+	g_pSDKHooks->RemoveEntityListener(this);
+	plsys->RemovePluginsListener(this);
+
+	smutils->RemoveGameFrameHook(game_frame);
+
+	pSW_GameStats_WriteKill->Destroy();
+
+	gameconfs->CloseGameConfigFile(g_pGameConf);
 }

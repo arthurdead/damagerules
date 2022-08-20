@@ -55,6 +55,11 @@
 				"library" "server"
 				"linux" "@_ZN12CTFGameRules29ApplyOnDamageAliveModifyRulesERK15CTakeDamageInfoP11CBaseEntityRNS_20DamageModifyExtras_tE"
 			}
+			"CTFGameStats::SW_GameStats_WriteKill"
+			{
+				"library" "server"
+				"linux" "@_ZN12CTFGameStats22SW_GameStats_WriteKillEP9CTFPlayerS1_S1_P10IGameEventRK15CTakeDamageInfo"
+			}
 		}
 		"Offsets"
 		{
@@ -105,6 +110,18 @@
 			"CBaseCombatCharacter::GetBossType"
 			{
 				"linux" "327"
+			}
+			"CBaseCombatCharacter::Event_Killed"
+			{
+				"linux" "67"
+			}
+			"CMultiplayRules::DeathNotice"
+			{
+				"linux" "83"
+			}
+			"CBaseEntity::IsPlayer"
+			{
+				"linux" "81"
 			}
 		}
 	}
