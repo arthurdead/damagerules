@@ -32,7 +32,9 @@
 #include <unordered_map>
 #include <string_view>
 #include <string>
+#include <stack>
 
+using namespace std::literals::string_literals;
 using namespace std::literals::string_view_literals;
 
 #ifdef __HAS_NEXTBOT
@@ -1226,7 +1228,7 @@ public:
 
 static int player_manager_ref = INVALID_EHANDLE_INDEX;
 
-#define PLAYER_BLOCK_USERID 999
+#define PLAYER_BLOCK_USERID (SHRT_MAX-1)
 #define PLAYER_BLOCK_CLIENT_IDX (playerhelpers->GetMaxClients()-1)
 #define PLAYER_BLOCK_ENTITY_IDX (PLAYER_BLOCK_CLIENT_IDX+1)
 
@@ -1317,10 +1319,7 @@ void init_playerblock_userinfo()
 	byteswap.SetTargetBigEndian( false );
 	byteswap.SwapFieldsToTargetEndian( &playerblock_info );
 
-	bool oldlock = engine->LockNetworkStringTables(false);
 	m_pUserInfoTable->SetStringUserData( PLAYER_BLOCK_CLIENT_IDX, sizeof(player_info_t), &playerblock_info );
-	m_pUserInfoTable->SetTick(gpGlobals->tickcount);
-	engine->LockNetworkStringTables(oldlock);
 }
 
 void update_playerblock_userinfo(const char *name)
@@ -1331,10 +1330,7 @@ void update_playerblock_userinfo(const char *name)
 	byteswap.SetTargetBigEndian( false );
 	byteswap.SwapFieldsToTargetEndian( &playerblock_info );
 
-	bool oldlock = engine->LockNetworkStringTables(false);
 	m_pUserInfoTable->SetStringUserData( PLAYER_BLOCK_CLIENT_IDX, sizeof(player_info_t), &playerblock_info );
-	m_pUserInfoTable->SetTick(gpGlobals->tickcount);
-	engine->LockNetworkStringTables(oldlock);
 }
 
 void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
@@ -1458,15 +1454,6 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
 
-	{
-	//TODO!!!! find another way to update instead of spam
-		const char *name{pThis->GetName()};
-		if(!name || name[0] == '\0') {
-			name = pThis->GetClassname();
-		}
-		update_playerblock_userinfo(name);
-	}
-
 	CTakeDamageInfo info = rawInfo;
 
 #if SOURCE_ENGINE == SE_TF2
@@ -1581,8 +1568,8 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 struct npc_death_notice_info_t
 {
-	bool sending{false};
-	float time{0.0f};
+	bool sending_connected{false};
+	float connected_time{0.0f};
 
 	int m_bConnected_offset{-1};
 	int m_bValid_offset{-1};
@@ -1592,6 +1579,15 @@ struct npc_death_notice_info_t
 	float team_time{0.0f};
 
 	int m_iTeam_offset{-1};
+
+	bool sending_name{false};
+	float name_time{0.0f};
+
+	std::string name{"ERRORNAME"s};
+
+	float event_time{0.0f};
+	bool sending_event{false};
+	bool in_fire_event{false};
 };
 
 npc_death_notice_info_t npc_death_notice_info{};
@@ -1599,8 +1595,8 @@ npc_death_notice_info_t npc_death_notice_info{};
 SendVarProxyFn real_proxy_connected{nullptr};
 static void fake_proxy_connected(const SendProp *pProp, const void *pStructBase, const void *pData, DVariant *pOut, int iElement, int objectID)
 {
-	if(npc_death_notice_info.sending) {
-		bool connected{true};
+	if(npc_death_notice_info.sending_connected) {
+		int connected{1};
 		real_proxy_connected(pProp, pStructBase, &connected, pOut, iElement, objectID);
 	} else {
 		real_proxy_connected(pProp, pStructBase, pData, pOut, iElement, objectID);
@@ -1610,8 +1606,8 @@ static void fake_proxy_connected(const SendProp *pProp, const void *pStructBase,
 SendVarProxyFn real_proxy_valid{nullptr};
 static void fake_proxy_valid(const SendProp *pProp, const void *pStructBase, const void *pData, DVariant *pOut, int iElement, int objectID)
 {
-	if(npc_death_notice_info.sending) {
-		bool valid{true};
+	if(npc_death_notice_info.sending_connected) {
+		int valid{1};
 		real_proxy_valid(pProp, pStructBase, &valid, pOut, iElement, objectID);
 	} else {
 		real_proxy_valid(pProp, pStructBase, pData, pOut, iElement, objectID);
@@ -1628,65 +1624,148 @@ static void fake_proxy_team(const SendProp *pProp, const void *pStructBase, cons
 	}
 }
 
+struct playerdeath_event_t
+{
+	char data[MAX_EVENT_BYTES]{0};
+	bool dont_broadcast{false};
+};
+
+static std::stack<playerdeath_event_t> npc_death_events{};
+
+void send_npc_death_events()
+{
+	while(!npc_death_events.empty()) {
+		playerdeath_event_t &npc_event{npc_death_events.top()};
+
+		bf_read read{};
+		read.StartReading(npc_event.data, MAX_EVENT_BYTES);
+
+		IGameEvent *event{gameeventmanager->UnserializeEvent(&read)};
+
+		npc_death_notice_info.in_fire_event = true;
+		gameeventmanager->FireEvent(event, npc_event.dont_broadcast);
+		npc_death_notice_info.in_fire_event = false;
+
+		npc_death_events.pop();
+	}
+}
+
 void game_frame(bool simulating)
 {
 	if(!simulating) {
 		return;
 	}
 
-	if(npc_death_notice_info.sending) {
-		if(npc_death_notice_info.time < gpGlobals->curtime) {
-			npc_death_notice_info.sending = false;
-			npc_death_notice_info.time = 0.0f;
-		} else {
-			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
-			if(pEntity) {
-				SetEdictStateChanged(pEntity, npc_death_notice_info.m_bConnected_offset);
-				SetEdictStateChanged(pEntity, npc_death_notice_info.m_bValid_offset);
-			}
+	if(npc_death_notice_info.sending_name) {
+		if(npc_death_notice_info.name_time < gpGlobals->curtime) {
+			npc_death_notice_info.sending_name = false;
+			npc_death_notice_info.name_time = 0.0f;
+			npc_death_notice_info.name = "ERRORNAME"s;
 		}
+
+		update_playerblock_userinfo(npc_death_notice_info.name.c_str());
 	}
 
 	if(npc_death_notice_info.sending_team) {
 		if(npc_death_notice_info.team_time < gpGlobals->curtime) {
 			npc_death_notice_info.sending_team = false;
-			npc_death_notice_info.team = 0;
 			npc_death_notice_info.team_time = 0.0f;
-		} else {
-			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
-			if(pEntity) {
-				SetEdictStateChanged(pEntity, npc_death_notice_info.m_iTeam_offset);
-			}
+			npc_death_notice_info.team = 0;
 		}
+
+		CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
+		if(pEntity) {
+			SetEdictStateChanged(pEntity, npc_death_notice_info.m_iTeam_offset);
+		}
+	}
+
+	if(npc_death_notice_info.sending_connected) {
+		if(npc_death_notice_info.connected_time < gpGlobals->curtime) {
+			npc_death_notice_info.sending_connected = false;
+			npc_death_notice_info.connected_time = 0.0f;
+		}
+
+		CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
+		if(pEntity) {
+			SetEdictStateChanged(pEntity, npc_death_notice_info.m_bConnected_offset);
+			SetEdictStateChanged(pEntity, npc_death_notice_info.m_bValid_offset);
+		}
+	}
+
+	if(npc_death_notice_info.sending_event) {
+		if(npc_death_notice_info.event_time < gpGlobals->curtime) {
+			npc_death_notice_info.sending_event = false;
+			npc_death_notice_info.event_time = 0.0f;
+			send_npc_death_events();
+		}
+	}
+}
+
+bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
+{
+	if(npc_death_notice_info.in_fire_event ||
+		!in_npc_death_notice) {
+		RETURN_META_VALUE(MRES_IGNORED, false);
+	}
+
+	IGameEventManager2 *pThis = META_IFACEPTR(IGameEventManager2);
+
+	playerdeath_event_t &npc_event{npc_death_events.emplace()};
+	npc_event.dont_broadcast = bDontBroadcast;
+
+	bf_write write{};
+	write.StartWriting(npc_event.data, MAX_EVENT_BYTES);
+
+	if(pThis->SerializeEvent(event, &write)) {
+		pThis->FreeEvent(event);
+		RETURN_META_VALUE(MRES_SUPERCEDE, true);
+	} else {
+		npc_death_events.pop();
+		RETURN_META_VALUE(MRES_HANDLED, false);
 	}
 }
 
 void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info)
 {
-	in_npc_death_notice = true;
-	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
-	npc_edict = pVictim->edict();
-	m_Network->SetEdict(npc_edict);
 	const char *name{pVictim->GetName()};
 	if(!name || name[0] == '\0') {
 		name = pVictim->GetClassname();
 	}
+
 	update_playerblock_userinfo(name);
+
+	npc_death_notice_info.sending_event = true;
+	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
+
+	npc_death_notice_info.sending_connected = true;
+	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
+
 	int team = pVictim->GetTeamNumber();
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
-	npc_death_notice_info.sending = true;
-	npc_death_notice_info.time = gpGlobals->curtime + 1.0f;
+
 	npc_death_notice_info.sending_team = true;
-	npc_death_notice_info.team_time = gpGlobals->curtime + 6.0f;
+	npc_death_notice_info.team_time = npc_death_notice_info.connected_time;
 	npc_death_notice_info.team = team;
-	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(player_manager_ref);
-	if(pEntity) {
-		SetEdictStateChanged(pEntity, npc_death_notice_info.m_bConnected_offset);
-		SetEdictStateChanged(pEntity, npc_death_notice_info.m_bValid_offset);
-		SetEdictStateChanged(pEntity, npc_death_notice_info.m_iTeam_offset);
+
+	npc_death_notice_info.sending_name = true;
+	npc_death_notice_info.name_time = npc_death_notice_info.connected_time;
+	npc_death_notice_info.name = name;
+
+	CBaseEntity *pPlayerManager = gamehelpers->ReferenceToEntity(player_manager_ref);
+	if(pPlayerManager) {
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bConnected_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bValid_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_iTeam_offset);
 	}
+
+	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+
+	in_npc_death_notice = true;
+	npc_edict = pVictim->edict();
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	m_Network->SetEdict(npc_edict);
 	((CMultiplayRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info);
 	m_Network->SetEdict(nullptr);
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 	npc_edict = nullptr;
 	in_npc_death_notice = false;
 }
@@ -1805,6 +1884,8 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 	DETOUR_MEMBER_CALL(SW_GameStats_WriteKill)(pKiller, pVictim, pAssister, event, info);
 }
 
+SH_DECL_HOOK2(IGameEventManager2, FireEvent, SH_NOATTRIB, 0, bool, IGameEvent *, bool)
+
 bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
 	gpGlobals = ismm->GetCGlobals();
@@ -1817,6 +1898,7 @@ bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool l
 	ConVar_Register(0, this);
 
 	SH_ADD_HOOK(IVEngineServer, GetPlayerUserId, engine, SH_STATIC(hook_getuserid), false);
+	SH_ADD_HOOK(IGameEventManager2, FireEvent, gameeventmanager, SH_STATIC(hook_fireevent), false);
 
 	dictionary = servertools->GetEntityFactoryDictionary();
 	player_size = dictionary->FindFactory("player")->GetEntitySize();
