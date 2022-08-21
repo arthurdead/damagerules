@@ -123,6 +123,14 @@
 			{
 				"linux" "81"
 			}
+			"CBaseEntity::Classify"
+			{
+				"linux" "54"
+			}
+			"CMultiplayRules::GetDeathScorer"
+			{
+				"linux" "142"
+			}
 		}
 	}
 }

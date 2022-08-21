@@ -400,6 +400,8 @@ int CGameRulesAdjustPlayerDamageInflicted = -1;
 int CGameRulesShouldUseRobustRadiusDamage = -1;
 int CGameRulesGetAmmoDamageOffset = -1;
 void *CGameRulesGetAmmoDamagePtr = nullptr;
+int CMultiplayRulesGetDeathScorerOffset = -1;
+void *CMultiplayRulesGetDeathScorerPtr = nullptr;
 
 int CGameRulesGetSkillLevel = -1;
 
@@ -427,14 +429,20 @@ public:
 	}
 };
 
-int CMultiplayRulesDeathNotice = -1;
+int CMultiplayRulesDeathNoticeOffset = -1;
+void *CMultiplayRulesDeathNoticePtr = nullptr;
 
 class CMultiplayRules : public CGameRules
 {
 public:
 	void DeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info)
 	{
-		call_vfunc<void, CMultiplayRules, CBasePlayer *, const CTakeDamageInfo &>(this, CMultiplayRulesDeathNotice, pVictim, info);
+		call_mfunc<void, CMultiplayRules, CBasePlayer *, const CTakeDamageInfo &>(this, CMultiplayRulesDeathNoticePtr, pVictim, info);
+	}
+
+	CBasePlayer *GetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
+	{
+		return call_mfunc<CBasePlayer *, CMultiplayRules, CBaseEntity *, CBaseEntity *>(this, CMultiplayRulesGetDeathScorerPtr, pKiller, pInflictor);
 	}
 };
 
@@ -1131,20 +1139,20 @@ CAmmoDef *GetAmmoDef()
 #endif
 }
 
-class GameRulesVTableHack
+static void *player_block{nullptr};
+
+class GameRulesVTableHack : public CTFGameRules
 {
 public:
-	void AdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
+	void DetourAdjustPlayerDamageTaken( CTakeDamageInfo *pInfo )
 	{
-		CGameRules *pThis = (CGameRules *)this;
-
 		if( pInfo->GetDamageType() & (DMG_DROWN|DMG_CRUSH|DMG_FALL|DMG_POISON) )
 		{
 			// Skill level doesn't affect these types of damage.
 			return;
 		}
 
-		switch( pThis->GetSkillLevel() )
+		switch( GetSkillLevel() )
 		{
 		case SKILL_EASY:
 			pInfo->ScaleDamage( sk_dmg_take_scale1.GetFloat() );
@@ -1161,11 +1169,9 @@ public:
 	}
 
 	//TODO!!!!! call this only on melee weapons
-	float AdjustPlayerDamageInflicted( float damage )
+	float DetourAdjustPlayerDamageInflicted( float damage )
 	{
-		CGameRules *pThis = (CGameRules *)this;
-
-		switch( pThis->GetSkillLevel() ) 
+		switch( GetSkillLevel() ) 
 		{
 		case SKILL_EASY:
 			return damage * sk_dmg_inflict_scale1.GetFloat();
@@ -1185,7 +1191,7 @@ public:
 		}
 	}
 
-	bool ShouldUseRobustRadiusDamage(CBaseEntity *pEntity)
+	bool DetourShouldUseRobustRadiusDamage(CBaseEntity *pEntity)
 	{
 		if( !sv_robust_explosions.GetBool() )
 			return false;
@@ -1199,14 +1205,12 @@ public:
 		return true;
 	}
 
-	float GetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
+	float DetourGetAmmoDamage( CBaseEntity *pAttacker, CBaseEntity *pVictim, int nAmmoType )
 	{
-		CGameRules *pThis = (CGameRules *)this;
-
 		float flDamage = 0.0f;
 		CAmmoDef *pAmmoDef = GetAmmoDef();
 
-		flDamage = pThis->GetAmmoDamage( pAttacker, pVictim, nAmmoType );
+		flDamage = CTFGameRules::GetAmmoDamage( pAttacker, pVictim, nAmmoType );
 
 		if( pAttacker->IsPlayer() && pVictim->IsNPC() )
 		{
@@ -1222,6 +1226,10 @@ public:
 
 		return flDamage;
 	}
+
+	CBasePlayer *DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor );
+
+	void DetourDeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info);
 };
 
 #include <sourcehook/sh_memory.h>
@@ -1232,12 +1240,12 @@ static int player_manager_ref = INVALID_EHANDLE_INDEX;
 #define PLAYER_BLOCK_CLIENT_IDX (playerhelpers->GetMaxClients()-1)
 #define PLAYER_BLOCK_ENTITY_IDX (PLAYER_BLOCK_CLIENT_IDX+1)
 
-static void *player_block{nullptr};
 static void **player_block_vtable{nullptr};
 
 const char *g_szGameRulesProxy = nullptr;
 
 int CBaseEntityIsPlayer = -1;
+int CBaseEntityClassify = -1;
 int CBaseEntityGetNetworkableOffset = -1;
 void *CBaseEntityGetNetworkable = nullptr;
 
@@ -1247,6 +1255,11 @@ public:
 	bool IsPlayer()
 	{
 		return true;
+	}
+
+	Class_T Classify()
+	{
+		return CLASS_PLAYER;
 	}
 };
 
@@ -1353,13 +1366,17 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 		if(g_pGameRules) {
 			void **vtabl = *(void ***)g_pGameRules;
 
-			SourceHook::SetMemAccess(vtabl, (CGameRulesAdjustPlayerDamageTaken * sizeof(void *)) + 4, SH_MEM_READ|SH_MEM_WRITE|SH_MEM_EXEC);
+			SourceHook::SetMemAccess(vtabl, (CMultiplayRulesDeathNoticeOffset * sizeof(void *)) + 4, SH_MEM_READ|SH_MEM_WRITE|SH_MEM_EXEC);
 
-			vtabl[CGameRulesAdjustPlayerDamageTaken] = func_to_void(&GameRulesVTableHack::AdjustPlayerDamageTaken);
-			vtabl[CGameRulesAdjustPlayerDamageInflicted] = func_to_void(&GameRulesVTableHack::AdjustPlayerDamageInflicted);
-			vtabl[CGameRulesShouldUseRobustRadiusDamage] = func_to_void(&GameRulesVTableHack::ShouldUseRobustRadiusDamage);
+			vtabl[CGameRulesAdjustPlayerDamageTaken] = func_to_void(&GameRulesVTableHack::DetourAdjustPlayerDamageTaken);
+			vtabl[CGameRulesAdjustPlayerDamageInflicted] = func_to_void(&GameRulesVTableHack::DetourAdjustPlayerDamageInflicted);
+			vtabl[CGameRulesShouldUseRobustRadiusDamage] = func_to_void(&GameRulesVTableHack::DetourShouldUseRobustRadiusDamage);
 			CGameRulesGetAmmoDamagePtr = vtabl[CGameRulesGetAmmoDamageOffset];
-			vtabl[CGameRulesGetAmmoDamageOffset] = func_to_void(&GameRulesVTableHack::GetAmmoDamage);
+			vtabl[CGameRulesGetAmmoDamageOffset] = func_to_void(&GameRulesVTableHack::DetourGetAmmoDamage);
+			CMultiplayRulesGetDeathScorerPtr = vtabl[CMultiplayRulesGetDeathScorerOffset];
+			vtabl[CMultiplayRulesGetDeathScorerOffset] = func_to_void(&GameRulesVTableHack::DetourGetDeathScorer);
+			CMultiplayRulesDeathNoticePtr = vtabl[CMultiplayRulesDeathNoticeOffset];
+			vtabl[CMultiplayRulesDeathNoticeOffset] = func_to_void(&GameRulesVTableHack::DetourDeathNotice);
 
 			gamerules_vtable_assigned = true;
 		}
@@ -1371,6 +1388,7 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 
 			player_block_vtable[CBaseEntityGetNetworkableOffset] = CBaseEntityGetNetworkable;
 			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
+			player_block_vtable[CBaseEntityClassify] = func_to_void(&PlayerBlockVTable::Classify);
 		}
 
 		if(!player_block) {
@@ -1383,11 +1401,12 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 }
 
 bool in_npc_death_notice = false;
+bool in_player_death_notice = false;
 edict_t *npc_edict{nullptr};
 
 int hook_getuserid(const edict_t *e)
 {
-	if(in_npc_death_notice && e == npc_edict) {
+	if((in_npc_death_notice || in_player_death_notice) && e == npc_edict) {
 		RETURN_META_VALUE(MRES_SUPERCEDE, PLAYER_BLOCK_USERID);
 	}
 
@@ -1701,10 +1720,25 @@ void game_frame(bool simulating)
 	}
 }
 
+CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
+{
+	CBasePlayer *pPlayer{CTFGameRules::GetDeathScorer(pKiller, pInflictor)};
+	if(pPlayer) {
+		return pPlayer;
+	}
+
+	if(in_player_death_notice) {
+		return ((CBasePlayer *)player_block);
+	}
+
+	return nullptr;
+}
+
 bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 {
 	if(npc_death_notice_info.in_fire_event ||
-		!in_npc_death_notice) {
+		(!in_npc_death_notice &&
+		!in_player_death_notice)) {
 		RETURN_META_VALUE(MRES_IGNORED, false);
 	}
 
@@ -1723,6 +1757,59 @@ bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 		npc_death_events.pop();
 		RETURN_META_VALUE(MRES_HANDLED, false);
 	}
+}
+
+void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info)
+{
+	CBaseEntity *pKiller{info.GetAttacker()};
+	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
+	bool is_npc{!!(ntype & npc_custom)};
+	if(!is_npc) {
+		CTFGameRules::DeathNotice(pVictim, info);
+		return;
+	}
+
+	const char *name{pKiller->GetName()};
+	if(!name || name[0] == '\0') {
+		name = pKiller->GetClassname();
+	}
+
+	update_playerblock_userinfo(name);
+
+	npc_death_notice_info.sending_event = true;
+	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
+
+	npc_death_notice_info.sending_connected = true;
+	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
+
+	int team = pKiller->GetTeamNumber();
+
+	npc_death_notice_info.sending_team = true;
+	npc_death_notice_info.team_time = npc_death_notice_info.connected_time;
+	npc_death_notice_info.team = team;
+
+	npc_death_notice_info.sending_name = true;
+	npc_death_notice_info.name_time = npc_death_notice_info.connected_time;
+	npc_death_notice_info.name = name;
+
+	CBaseEntity *pPlayerManager = gamehelpers->ReferenceToEntity(player_manager_ref);
+	if(pPlayerManager) {
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bConnected_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bValid_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_iTeam_offset);
+	}
+
+	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+
+	in_player_death_notice = true;
+	npc_edict = pKiller->edict();
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	m_Network->SetEdict(npc_edict);
+	CTFGameRules::DeathNotice(pVictim, info);
+	m_Network->SetEdict(nullptr);
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
+	npc_edict = nullptr;
+	in_player_death_notice = false;
 }
 
 void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info)
@@ -1877,7 +1964,8 @@ CDetour *pSW_GameStats_WriteKill = nullptr;
 
 DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer*, pVictim, CTFPlayer*, pAssister, IGameEvent*, event, const CTakeDamageInfo &,info )
 {
-	if(in_npc_death_notice) {
+	if(in_npc_death_notice ||
+		in_player_death_notice) {
 		return;
 	}
 
@@ -1943,7 +2031,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CGameRules::ShouldUseRobustRadiusDamage", &CGameRulesShouldUseRobustRadiusDamage);
 	g_pGameConf->GetOffset("CGameRules::GetAmmoDamage", &CGameRulesGetAmmoDamageOffset);
 
-	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNotice);
+	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNoticeOffset);
+	g_pGameConf->GetOffset("CMultiplayRules::GetDeathScorer", &CMultiplayRulesGetDeathScorerOffset);
 
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
@@ -1974,6 +2063,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	SH_MANUALHOOK_RECONFIGURE(Event_Killed, offset, 0, 0);
 
 	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
+	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
 
 	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
 
