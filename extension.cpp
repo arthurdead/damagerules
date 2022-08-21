@@ -301,11 +301,22 @@ void SetEdictStateChanged(CBaseEntity *pEntity, int offset)
 	gamehelpers->SetEdictStateChanged(edict, offset);
 }
 
+int CBaseAnimatingIgnite = -1;
+
+class CBaseAnimating : public CBaseEntity
+{
+public:
+	void Ignite( float flFlameLifetime, bool bNPCOnly, float flSize, bool bCalledByLevelDesigner )
+	{
+		call_vfunc<void, CBaseAnimating, float, bool , float, bool>(this, CBaseAnimatingIgnite, flFlameLifetime, bNPCOnly, flSize, bCalledByLevelDesigner);
+	}
+};
+
 int CBaseCombatCharacterGetBossType = -1;
 
 using HalloweenBossType = int;
 
-class CBaseCombatCharacter : public CBaseEntity
+class CBaseCombatCharacter : public CBaseAnimating
 {
 public:
 	HalloweenBossType GetBossType()
@@ -314,7 +325,18 @@ public:
 	}
 };
 
-class CBasePlayer : public CBaseEntity
+int NextBotCombatCharacterIgnite = -1;
+
+class NextBotCombatCharacter : public CBaseCombatCharacter
+{
+public:
+	void Ignite( float flFlameLifetime, CBaseEntity *pAttacker )
+	{
+		call_vfunc<void, NextBotCombatCharacter, float, CBaseEntity *>(this, NextBotCombatCharacterIgnite, flFlameLifetime, pAttacker);
+	}
+};
+
+class CBasePlayer : public CBaseCombatCharacter
 {
 public:
 	int OnTakeDamage( const CTakeDamageInfo &info )
@@ -447,6 +469,8 @@ public:
 };
 
 #if SOURCE_ENGINE == SE_TF2
+int CTFGameRulesDeathNotice = -1;
+
 class CTFGameRules : public CMultiplayRules
 {
 public:
@@ -458,6 +482,11 @@ public:
 	float ApplyOnDamageAliveModifyRules( const CTakeDamageInfo &info, CBaseEntity *pVictimBaseEntity, DamageModifyExtras_t& outParams )
 	{
 		return call_mfunc<float, CTFGameRules, const CTakeDamageInfo &, CBaseEntity *, DamageModifyExtras_t &>(this, CTFGameRulesApplyOnDamageAliveModifyRules, info, pVictimBaseEntity, outParams);
+	}
+
+	void DeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info, const char *eventName)
+	{
+		call_vfunc<void, CTFGameRules, CBasePlayer *, const CTakeDamageInfo &, const char *>(this, CTFGameRulesDeathNotice, pVictim, info, eventName);
 	}
 };
 
@@ -1246,6 +1275,7 @@ const char *g_szGameRulesProxy = nullptr;
 
 int CBaseEntityIsPlayer = -1;
 int CBaseEntityClassify = -1;
+int CBasePlayerIsBot = -1;
 int CBaseEntityGetNetworkableOffset = -1;
 void *CBaseEntityGetNetworkable = nullptr;
 
@@ -1260,6 +1290,11 @@ public:
 	Class_T Classify()
 	{
 		return CLASS_PLAYER;
+	}
+
+	bool IsBot()
+	{
+		return true;
 	}
 };
 
@@ -1384,11 +1419,12 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 
 	{
 		if(!player_block_vtable) {
-			player_block_vtable = new void *[CBaseEntityIsPlayer];
+			player_block_vtable = new void *[CBasePlayerIsBot];
 
 			player_block_vtable[CBaseEntityGetNetworkableOffset] = CBaseEntityGetNetworkable;
 			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
 			player_block_vtable[CBaseEntityClassify] = func_to_void(&PlayerBlockVTable::Classify);
+			player_block_vtable[CBasePlayerIsBot] = func_to_void(&PlayerBlockVTable::IsBot);
 		}
 
 		if(!player_block) {
@@ -1397,6 +1433,7 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 		}
 	}
 
+	m_pUserInfoTable = netstringtables->FindTable("userinfo");
 	init_playerblock_userinfo();
 }
 
@@ -1469,6 +1506,207 @@ void ModifyDamage( CTakeDamageInfo *info )
 
 }
 
+#define TF_BURNING_FLAME_LIFE		10.0
+#define TF_BURNING_FLAME_LIFE_PYRO	0.25		// pyro only displays burning effect momentarily
+#define TF_BURNING_FLAME_LIFE_FLARE 10.0
+#define TF_BURNING_FLAME_LIFE_PLASMA 6.0
+
+enum ETFWeaponType
+{
+	TF_WEAPON_NONE = 0,
+	TF_WEAPON_BAT,
+	TF_WEAPON_BAT_WOOD,
+	TF_WEAPON_BOTTLE, 
+	TF_WEAPON_FIREAXE,
+	TF_WEAPON_CLUB,
+	TF_WEAPON_CROWBAR,
+	TF_WEAPON_KNIFE,
+	TF_WEAPON_FISTS,
+	TF_WEAPON_SHOVEL,
+	TF_WEAPON_WRENCH,
+	TF_WEAPON_BONESAW,
+	TF_WEAPON_SHOTGUN_PRIMARY,
+	TF_WEAPON_SHOTGUN_SOLDIER,
+	TF_WEAPON_SHOTGUN_HWG,
+	TF_WEAPON_SHOTGUN_PYRO,
+	TF_WEAPON_SCATTERGUN,
+	TF_WEAPON_SNIPERRIFLE,
+	TF_WEAPON_MINIGUN,
+	TF_WEAPON_SMG,
+	TF_WEAPON_SYRINGEGUN_MEDIC,
+	TF_WEAPON_TRANQ,
+	TF_WEAPON_ROCKETLAUNCHER,
+	TF_WEAPON_GRENADELAUNCHER,
+	TF_WEAPON_PIPEBOMBLAUNCHER,
+	TF_WEAPON_FLAMETHROWER,
+	TF_WEAPON_GRENADE_NORMAL,
+	TF_WEAPON_GRENADE_CONCUSSION,
+	TF_WEAPON_GRENADE_NAIL,
+	TF_WEAPON_GRENADE_MIRV,
+	TF_WEAPON_GRENADE_MIRV_DEMOMAN,
+	TF_WEAPON_GRENADE_NAPALM,
+	TF_WEAPON_GRENADE_GAS,
+	TF_WEAPON_GRENADE_EMP,
+	TF_WEAPON_GRENADE_CALTROP,
+	TF_WEAPON_GRENADE_PIPEBOMB,
+	TF_WEAPON_GRENADE_SMOKE_BOMB,
+	TF_WEAPON_GRENADE_HEAL,
+	TF_WEAPON_GRENADE_STUNBALL,
+	TF_WEAPON_GRENADE_JAR,
+	TF_WEAPON_GRENADE_JAR_MILK,
+	TF_WEAPON_PISTOL,
+	TF_WEAPON_PISTOL_SCOUT,
+	TF_WEAPON_REVOLVER,
+	TF_WEAPON_NAILGUN,
+	TF_WEAPON_PDA,
+	TF_WEAPON_PDA_ENGINEER_BUILD,
+	TF_WEAPON_PDA_ENGINEER_DESTROY,
+	TF_WEAPON_PDA_SPY,
+	TF_WEAPON_BUILDER,
+	TF_WEAPON_MEDIGUN,
+	TF_WEAPON_GRENADE_MIRVBOMB,
+	TF_WEAPON_FLAMETHROWER_ROCKET,
+	TF_WEAPON_GRENADE_DEMOMAN,
+	TF_WEAPON_SENTRY_BULLET,
+	TF_WEAPON_SENTRY_ROCKET,
+	TF_WEAPON_DISPENSER,
+	TF_WEAPON_INVIS,
+	TF_WEAPON_FLAREGUN,
+	TF_WEAPON_LUNCHBOX,
+	TF_WEAPON_JAR,
+	TF_WEAPON_COMPOUND_BOW,
+	TF_WEAPON_BUFF_ITEM,
+	TF_WEAPON_PUMPKIN_BOMB,
+	TF_WEAPON_SWORD, 
+	TF_WEAPON_ROCKETLAUNCHER_DIRECTHIT,
+	TF_WEAPON_LIFELINE,
+	TF_WEAPON_LASER_POINTER,
+	TF_WEAPON_DISPENSER_GUN,
+	TF_WEAPON_SENTRY_REVENGE,
+	TF_WEAPON_JAR_MILK,
+	TF_WEAPON_HANDGUN_SCOUT_PRIMARY,
+	TF_WEAPON_BAT_FISH,
+	TF_WEAPON_CROSSBOW,
+	TF_WEAPON_STICKBOMB,
+	TF_WEAPON_HANDGUN_SCOUT_SECONDARY,
+	TF_WEAPON_SODA_POPPER,
+	TF_WEAPON_SNIPERRIFLE_DECAP,
+	TF_WEAPON_RAYGUN,
+	TF_WEAPON_PARTICLE_CANNON,
+	TF_WEAPON_MECHANICAL_ARM,
+	TF_WEAPON_DRG_POMSON,
+	TF_WEAPON_BAT_GIFTWRAP,
+	TF_WEAPON_GRENADE_ORNAMENT_BALL,
+	TF_WEAPON_FLAREGUN_REVENGE,
+	TF_WEAPON_PEP_BRAWLER_BLASTER,
+	TF_WEAPON_CLEAVER,
+	TF_WEAPON_GRENADE_CLEAVER,
+	TF_WEAPON_STICKY_BALL_LAUNCHER,
+	TF_WEAPON_GRENADE_STICKY_BALL,
+	TF_WEAPON_SHOTGUN_BUILDING_RESCUE,
+	TF_WEAPON_CANNON,
+	TF_WEAPON_THROWABLE,
+	TF_WEAPON_GRENADE_THROWABLE,
+	TF_WEAPON_PDA_SPY_BUILD,
+	TF_WEAPON_GRENADE_WATERBALLOON,
+	TF_WEAPON_HARVESTER_SAW,
+	TF_WEAPON_SPELLBOOK,
+	TF_WEAPON_SPELLBOOK_PROJECTILE,
+	TF_WEAPON_SNIPERRIFLE_CLASSIC,
+	TF_WEAPON_PARACHUTE,
+	TF_WEAPON_GRAPPLINGHOOK,
+	TF_WEAPON_PASSTIME_GUN,
+	TF_WEAPON_CHARGED_SMG,
+	TF_WEAPON_COUNT
+};
+
+enum ETFDmgCustom
+{
+	TF_DMG_CUSTOM_NONE = 0,
+	TF_DMG_CUSTOM_HEADSHOT,
+	TF_DMG_CUSTOM_BACKSTAB,
+	TF_DMG_CUSTOM_BURNING,
+	TF_DMG_WRENCH_FIX,
+	TF_DMG_CUSTOM_MINIGUN,
+	TF_DMG_CUSTOM_SUICIDE,
+	TF_DMG_CUSTOM_TAUNTATK_HADOUKEN,
+	TF_DMG_CUSTOM_BURNING_FLARE,
+	TF_DMG_CUSTOM_TAUNTATK_HIGH_NOON,
+	TF_DMG_CUSTOM_TAUNTATK_GRAND_SLAM,
+	TF_DMG_CUSTOM_PENETRATE_MY_TEAM,
+	TF_DMG_CUSTOM_PENETRATE_ALL_PLAYERS,
+	TF_DMG_CUSTOM_TAUNTATK_FENCING,
+	TF_DMG_CUSTOM_PENETRATE_NONBURNING_TEAMMATE,
+	TF_DMG_CUSTOM_TAUNTATK_ARROW_STAB,
+	TF_DMG_CUSTOM_TELEFRAG,
+	TF_DMG_CUSTOM_BURNING_ARROW,
+	TF_DMG_CUSTOM_FLYINGBURN,
+	TF_DMG_CUSTOM_PUMPKIN_BOMB,
+	TF_DMG_CUSTOM_DECAPITATION,
+	TF_DMG_CUSTOM_TAUNTATK_GRENADE,
+	TF_DMG_CUSTOM_BASEBALL,
+	TF_DMG_CUSTOM_CHARGE_IMPACT,
+	TF_DMG_CUSTOM_TAUNTATK_BARBARIAN_SWING,
+	TF_DMG_CUSTOM_AIR_STICKY_BURST,
+	TF_DMG_CUSTOM_DEFENSIVE_STICKY,
+	TF_DMG_CUSTOM_PICKAXE,
+	TF_DMG_CUSTOM_ROCKET_DIRECTHIT,
+	TF_DMG_CUSTOM_TAUNTATK_UBERSLICE,
+	TF_DMG_CUSTOM_PLAYER_SENTRY,
+	TF_DMG_CUSTOM_STANDARD_STICKY,
+	TF_DMG_CUSTOM_SHOTGUN_REVENGE_CRIT,
+	TF_DMG_CUSTOM_TAUNTATK_ENGINEER_GUITAR_SMASH,
+	TF_DMG_CUSTOM_BLEEDING,
+	TF_DMG_CUSTOM_GOLD_WRENCH,
+	TF_DMG_CUSTOM_CARRIED_BUILDING,
+	TF_DMG_CUSTOM_COMBO_PUNCH,
+	TF_DMG_CUSTOM_TAUNTATK_ENGINEER_ARM_KILL,
+	TF_DMG_CUSTOM_FISH_KILL,
+	TF_DMG_CUSTOM_TRIGGER_HURT,
+	TF_DMG_CUSTOM_DECAPITATION_BOSS,
+	TF_DMG_CUSTOM_STICKBOMB_EXPLOSION,
+	TF_DMG_CUSTOM_AEGIS_ROUND,
+	TF_DMG_CUSTOM_FLARE_EXPLOSION,
+	TF_DMG_CUSTOM_BOOTS_STOMP,
+	TF_DMG_CUSTOM_PLASMA,
+	TF_DMG_CUSTOM_PLASMA_CHARGED,
+	TF_DMG_CUSTOM_PLASMA_GIB,
+	TF_DMG_CUSTOM_PRACTICE_STICKY,
+	TF_DMG_CUSTOM_EYEBALL_ROCKET,
+	TF_DMG_CUSTOM_HEADSHOT_DECAPITATION,
+	TF_DMG_CUSTOM_TAUNTATK_ARMAGEDDON,
+	TF_DMG_CUSTOM_FLARE_PELLET,
+	TF_DMG_CUSTOM_CLEAVER,
+	TF_DMG_CUSTOM_CLEAVER_CRIT,
+	TF_DMG_CUSTOM_SAPPER_RECORDER_DEATH,
+	TF_DMG_CUSTOM_MERASMUS_PLAYER_BOMB,
+	TF_DMG_CUSTOM_MERASMUS_GRENADE,
+	TF_DMG_CUSTOM_MERASMUS_ZAP,
+	TF_DMG_CUSTOM_MERASMUS_DECAPITATION,
+	TF_DMG_CUSTOM_CANNONBALL_PUSH,
+	TF_DMG_CUSTOM_TAUNTATK_ALLCLASS_GUITAR_RIFF,
+	TF_DMG_CUSTOM_THROWABLE,
+	TF_DMG_CUSTOM_THROWABLE_KILL,
+	TF_DMG_CUSTOM_SPELL_TELEPORT,
+	TF_DMG_CUSTOM_SPELL_SKELETON,
+	TF_DMG_CUSTOM_SPELL_MIRV,
+	TF_DMG_CUSTOM_SPELL_METEOR,
+	TF_DMG_CUSTOM_SPELL_LIGHTNING,
+	TF_DMG_CUSTOM_SPELL_FIREBALL,
+	TF_DMG_CUSTOM_SPELL_MONOCULUS,
+	TF_DMG_CUSTOM_SPELL_BLASTJUMP,
+	TF_DMG_CUSTOM_SPELL_BATS,
+	TF_DMG_CUSTOM_SPELL_TINY,
+	TF_DMG_CUSTOM_KART,
+	TF_DMG_CUSTOM_GIANT_HAMMER,
+	TF_DMG_CUSTOM_RUNE_REFLECT,
+	TF_DMG_CUSTOM_END // END
+};
+
+ConVar *tf_flamethrower_boxsize = nullptr;
+
+void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info, const char *eventName);
+
 int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
@@ -1478,31 +1716,34 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 #if SOURCE_ENGINE == SE_TF2
 	if ( g_pGameRules )
 	{
-		((CTFGameRules *)g_pGameRules)->ApplyOnDamageModifyRules( info, pThis, true );
+		if(!((CTFGameRules *)g_pGameRules)->ApplyOnDamageModifyRules( info, pThis, true )) {
+			RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+		}
 	}
+
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
 
 	// On damage Rage
 	// Give the soldier/pyro some rage points for dealing/taking damage.
 	if ( info.GetDamage() && info.GetAttacker() != pThis )
 	{
-		CTFPlayer *pAttacker = (CTFPlayer *)info.GetAttacker()->IsPlayer();
-
 		// Buff flag 1: we get rage when we deal damage. Here, that means the soldier that attacked
 		// gets rage when we take damage.
-		HandleRageGain( pAttacker, kRageBuffFlag_OnDamageDealt, info.GetDamage(), 6.0f );
+		HandleRageGain( attackerPlayer, kRageBuffFlag_OnDamageDealt, info.GetDamage(), 6.0f );
 
 		// Buff 5: our pyro attacker get rage when we're damaged by fire
 		if ( ( info.GetDamageType() & DMG_BURN ) != 0 || ( info.GetDamageType() & DMG_PLASMA ) != 0 )
 		{
-			HandleRageGain( pAttacker, kRageBuffFlag_OnBurnDamageDealt, info.GetDamage(), 30.f );
+			HandleRageGain( attackerPlayer, kRageBuffFlag_OnBurnDamageDealt, info.GetDamage(), 30.f );
 		}
 
-		if ( pAttacker && info.GetWeapon() )
+		if ( attackerPlayer && info.GetWeapon() )
 		{
 			CTFWeaponBase *pWeapon = (CTFWeaponBase *)info.GetWeapon();
 			if ( pWeapon )
 			{
-				pWeapon->ApplyOnHitAttributes( pThis, pAttacker, info );
+				pWeapon->ApplyOnHitAttributes( pThis, attackerPlayer, info );
 			}
 		}
 	}
@@ -1527,11 +1768,35 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	// weapon-specific damage modification
 	ModifyDamage( &info );
 
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
+
 #if SOURCE_ENGINE == SE_TF2
+	DamageModifyExtras_t outParams{};
+
 	if ( g_pGameRules )
 	{
-		DamageModifyExtras_t outParams;
-		info.SetDamage( ((CTFGameRules *)g_pGameRules)->ApplyOnDamageAliveModifyRules( info, pThis, outParams ) );
+		float realDamage = ((CTFGameRules *)g_pGameRules)->ApplyOnDamageAliveModifyRules( info, pThis, outParams );
+		if(realDamage == -1.0f) {
+			RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+		}
+
+		info.SetDamage( realDamage );
+	}
+
+	if(outParams.bIgniting || (info.GetDamageType() & DMG_BURN)) {
+		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
+
+		if(attackerWeapon) {
+			switch(attackerWeapon->GetWeaponID()) {
+				case TF_WEAPON_FLAREGUN:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
+				case TF_WEAPON_PARTICLE_CANNON:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
+			}
+		}
+
+		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
 	}
 #endif
 
@@ -1539,20 +1804,18 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	IGameEvent *event = gameeventmanager->CreateEvent( "npc_hurt" );
 	if ( event )
 	{
-
 		event->SetInt( "entindex", pThis->entindex() );
 		event->SetInt( "health", MAX( 0, pThis->GetHealth() ) );
 		event->SetInt( "damageamount", info.GetDamage() );
 		event->SetBool( "crit", ( info.GetDamageType() & DMG_CRITICAL ) ? true : false );
 
-		CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
 		if ( attackerPlayer )
 		{
 			event->SetInt( "attacker_player", attackerPlayer->GetUserID() );
 
-			if ( attackerPlayer->GetActiveTFWeapon() )
+			if ( attackerWeapon )
 			{
-				event->SetInt( "weaponid", attackerPlayer->GetActiveTFWeapon()->GetWeaponID() );
+				event->SetInt( "weaponid", attackerWeapon->GetWeaponID() );
 			}
 			else
 			{
@@ -1581,6 +1844,13 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 		pAttacker->OnDealtDamage( (CBaseCombatCharacter *)pThis, info );
 	}
 #endif
+
+	if(attackerWeapon && attackerWeapon->GetWeaponID() == TF_WEAPON_BAT_FISH)
+	{
+		if(pThis->GetHealth() > 0) {
+			NPCDeathNotice(pThis, info, "fish_notice");
+		}
+	}
 
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
@@ -1763,9 +2033,9 @@ void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDam
 {
 	CBaseEntity *pKiller{info.GetAttacker()};
 	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
-	bool is_npc{!!(ntype & npc_custom)};
+	bool is_npc{ntype == npc_custom};
 	if(!is_npc) {
-		CTFGameRules::DeathNotice(pVictim, info);
+		CMultiplayRules::DeathNotice(pVictim, info);
 		return;
 	}
 
@@ -1805,14 +2075,14 @@ void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDam
 	npc_edict = pKiller->edict();
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
 	m_Network->SetEdict(npc_edict);
-	CTFGameRules::DeathNotice(pVictim, info);
+	CMultiplayRules::DeathNotice(pVictim, info);
 	m_Network->SetEdict(nullptr);
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 	npc_edict = nullptr;
 	in_player_death_notice = false;
 }
 
-void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info)
+void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info, const char *eventName)
 {
 	const char *name{pVictim->GetName()};
 	if(!name || name[0] == '\0') {
@@ -1850,7 +2120,11 @@ void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info)
 	npc_edict = pVictim->edict();
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
 	m_Network->SetEdict(npc_edict);
-	((CMultiplayRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info);
+	if(eventName) {
+		((CTFGameRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info, eventName);
+	} else {
+		((CMultiplayRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info);
+	}
 	m_Network->SetEdict(nullptr);
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 	npc_edict = nullptr;
@@ -1861,7 +2135,21 @@ void hook_npc_killed(const CTakeDamageInfo &info)
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
 
-	NPCDeathNotice(pThis, info);
+	CTakeDamageInfo info_copy = info;
+
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
+
+	const char *eventName{nullptr};
+
+	if(attackerWeapon && attackerWeapon->GetWeaponID() == TF_WEAPON_BAT_FISH)
+	{
+		info_copy.SetDamageCustom( TF_DMG_CUSTOM_FISH_KILL );
+
+		eventName = "fish_notice";
+	}
+
+	NPCDeathNotice(pThis, info_copy, eventName);
 
 	RETURN_META(MRES_HANDLED);
 }
@@ -1893,7 +2181,7 @@ void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
 		}
 	} else {
 		npc_type ntype{g_pNextBot->entity_to_npc_type(pEntity, classname)};
-		if(ntype & npc_custom) {
+		if(ntype == npc_custom) {
 			SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_STATIC(hook_npc_dtor), false);
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
 			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_STATIC(hook_npc_takedamagealive), false);
@@ -1985,6 +2273,8 @@ bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool l
 	g_pCVar = cvar;
 	ConVar_Register(0, this);
 
+	tf_flamethrower_boxsize = g_pCVar->FindVar("tf_flamethrower_boxsize");
+
 	SH_ADD_HOOK(IVEngineServer, GetPlayerUserId, engine, SH_STATIC(hook_getuserid), false);
 	SH_ADD_HOOK(IGameEventManager2, FireEvent, gameeventmanager, SH_STATIC(hook_fireevent), false);
 
@@ -2034,6 +2324,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNoticeOffset);
 	g_pGameConf->GetOffset("CMultiplayRules::GetDeathScorer", &CMultiplayRulesGetDeathScorerOffset);
 
+	g_pGameConf->GetOffset("CTFGameRules::DeathNotice", &CTFGameRulesDeathNotice);
+
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
 
@@ -2054,6 +2346,9 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 #endif
 	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
 
+	g_pGameConf->GetOffset("CBaseAnimating::Ignite", &CBaseAnimatingIgnite);
+	g_pGameConf->GetOffset("NextBotCombatCharacter::Ignite", &NextBotCombatCharacterIgnite);
+
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
 #endif
@@ -2064,6 +2359,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
 	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
+	g_pGameConf->GetOffset("CBasePlayer::IsBot", &CBasePlayerIsBot);
 
 	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
 

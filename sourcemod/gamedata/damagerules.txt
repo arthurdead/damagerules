@@ -131,6 +131,22 @@
 			{
 				"linux" "142"
 			}
+			"CBasePlayer::IsBot"
+			{
+				"linux" "452"
+			}
+			"CBaseAnimating::Ignite"
+			{
+				"linux" "217"
+			}
+			"NextBotCombatCharacter::Ignite"
+			{
+				"linux" "330"
+			}
+			"CTFGameRules::DeathNotice"
+			{
+				"linux" "244"
+			}
 		}
 	}
 }
