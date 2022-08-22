@@ -1501,15 +1501,13 @@ public:
 
 SH_DECL_MANUALHOOK1_void(Event_Killed, 0, 0, 0, const CTakeDamageInfo &)
 
-void ModifyDamage( CTakeDamageInfo *info )
-{
-
-}
-
 #define TF_BURNING_FLAME_LIFE		10.0
 #define TF_BURNING_FLAME_LIFE_PYRO	0.25		// pyro only displays burning effect momentarily
 #define TF_BURNING_FLAME_LIFE_FLARE 10.0
 #define TF_BURNING_FLAME_LIFE_PLASMA 6.0
+
+#define TF_DAMAGE_CRIT_MULTIPLIER			3.0f
+#define TF_DAMAGE_MINICRIT_MULTIPLIER		1.35f
 
 enum ETFWeaponType
 {
@@ -1707,6 +1705,73 @@ ConVar *tf_flamethrower_boxsize = nullptr;
 
 void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info, const char *eventName);
 
+ConVar tf_npc_dmg_mult_sentry( "tf_npc_dmg_mult_sentry", "0.5" );
+ConVar tf_npc_dmg_mult_sniper( "tf_npc_dmg_mult_sniper", "2.0" );
+ConVar tf_npc_dmg_mult_arrow( "tf_npc_dmg_mult_arrow", "3.0" );
+ConVar tf_npc_dmg_mult_minigun( "tf_npc_dmg_mult_minigun", "0.25" );
+ConVar tf_npc_dmg_mult_flamethrower( "tf_npc_dmg_mult_flamethrower", "0.5" );
+ConVar tf_npc_dmg_mult_scattergun( "tf_npc_dmg_mult_scattergun", "2.0" );
+ConVar tf_npc_dmg_mult_knife( "tf_npc_dmg_mult_knife", "3.0" );
+ConVar tf_npc_dmg_mult_revolver( "tf_npc_dmg_mult_revolver", "2.0" );
+ConVar tf_npc_dmg_mult_handgun( "tf_npc_dmg_mult_handgun", "1.75" );
+ConVar tf_npc_dmg_mult_sodapopper( "tf_npc_dmg_mult_sodapopper", "1.5" );
+ConVar tf_npc_dmg_mult_brawlerblaster( "tf_npc_dmg_mult_brawlerblaster", "3.0" );
+ConVar tf_npc_dmg_mult_grenade( "tf_bot_npc_dmg_mult_grenade", "2.0" );
+
+void ModifyDamage( CTakeDamageInfo *info )
+{
+	CBaseEntity *pInflictor = info->GetInflictor();
+	CTFWeaponBase *pWeapon = (CTFWeaponBase *)info->GetWeapon();
+
+	const char *inflictor_classname = pInflictor->GetClassname();
+	//TODO!!!! better way to do this
+	if(pInflictor && (strcmp(inflictor_classname, "obj_sentrygun") == 0 || strcmp(inflictor_classname, "tf_projectile_sentryrocket") == 0)) {
+		info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_sentry.GetFloat() );
+	} else if(pWeapon) {
+		switch( pWeapon->GetWeaponID() )
+		{
+		case TF_WEAPON_SNIPERRIFLE:
+		case TF_WEAPON_SNIPERRIFLE_DECAP:
+		case TF_WEAPON_SNIPERRIFLE_CLASSIC:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_sniper.GetFloat() );
+			break;
+		case TF_WEAPON_COMPOUND_BOW:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_arrow.GetFloat() );
+			break;
+		case TF_WEAPON_MINIGUN:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_minigun.GetFloat() );
+			break;
+		case TF_WEAPON_FLAMETHROWER:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_flamethrower.GetFloat() );
+			break;
+		case TF_WEAPON_KNIFE:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_knife.GetFloat() );
+			break;
+		case TF_WEAPON_SODA_POPPER:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_sodapopper.GetFloat() );
+			break;
+		case TF_WEAPON_PEP_BRAWLER_BLASTER:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_brawlerblaster.GetFloat() );
+			break;
+		case TF_WEAPON_SCATTERGUN:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_scattergun.GetFloat() );
+			break;
+		case TF_WEAPON_REVOLVER:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_revolver.GetFloat() );
+			break;
+		case TF_WEAPON_HANDGUN_SCOUT_PRIMARY:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_handgun.GetFloat() );
+			break;
+		case TF_WEAPON_SENTRY_BULLET:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_sentry.GetFloat() );
+			break;
+		case TF_WEAPON_GRENADE_DEMOMAN:
+			info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_grenade.GetFloat() );
+			break;
+		}
+	}
+}
+
 int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
@@ -1753,6 +1818,11 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
 
+float GetCritInjuryMultiplier()
+{
+	return TF_DAMAGE_CRIT_MULTIPLIER;
+}
+
 int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
@@ -1767,6 +1837,12 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 	// weapon-specific damage modification
 	ModifyDamage( &info );
+
+	if ( info.GetDamageType() & DMG_CRITICAL )
+	{
+		// do the critical damage increase
+		info.SetDamage( info.GetDamage() * GetCritInjuryMultiplier() );
+	}
 
 	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
 	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
