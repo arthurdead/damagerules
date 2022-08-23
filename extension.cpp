@@ -848,7 +848,7 @@ struct callback_holder_t
 
 	META_RES SPOnTakeDamage(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result)
 	{
-		if(!fwd) {
+		if(!fwd || fwd->GetFunctionCount() == 0) {
 			return MRES_IGNORED;
 		}
 
@@ -884,7 +884,7 @@ struct callback_holder_t
 
 	META_RES SPOnTakeDamageAlive(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result)
 	{
-		if(!alive_fwd) {
+		if(!alive_fwd || alive_fwd->GetFunctionCount() == 0) {
 			return MRES_IGNORED;
 		}
 
