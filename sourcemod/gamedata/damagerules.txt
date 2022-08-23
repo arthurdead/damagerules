@@ -151,6 +151,10 @@
 			{
 				"linux" "68"
 			}
+			"CBaseObject::Killed"
+			{
+				"linux" "353"
+			}
 		}
 	}
 }

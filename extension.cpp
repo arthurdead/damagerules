@@ -1093,6 +1093,7 @@ void mvm_skill_changed( IConVar *pVar, const char *pOldValue, float flOldValue )
 static size_t player_size{0};
 
 SH_DECL_HOOK1(IVEngineServer, GetPlayerUserId, SH_NOATTRIB, 0, int, const edict_t *)
+SH_DECL_HOOK1(IVEngineServer, GetClientSteamID, SH_NOATTRIB, 0, const CSteamID *, edict_t *)
 
 bool Sample::RegisterConCommandBase(ConCommandBase *pCommand)
 {
@@ -1383,6 +1384,44 @@ void update_playerblock_userinfo(const char *name)
 	m_pUserInfoTable->SetStringUserData( PLAYER_BLOCK_CLIENT_IDX, sizeof(player_info_t), &playerblock_info );
 }
 
+enum deathnotice_type_t
+{
+	deathnotice_none,
+	deathnotice_npc_death,
+	deathnotice_player_death,
+	deathnotice_object_death
+};
+
+deathnotice_type_t deathnotice_type{deathnotice_none};
+
+static void setup_playerblock_vars(CBaseEntity *pEntity);
+static void clear_playerblock_vars();
+
+CDetour *pObjectKilledDetour = nullptr;
+int CBaseObjectKilled = -1;
+
+DETOUR_DECL_MEMBER1(ObjectKilled, void, const CTakeDamageInfo &, info)
+{
+	CBaseEntity *pKiller{info.GetAttacker()};
+
+	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
+	if(ntype != npc_custom) {
+		DETOUR_MEMBER_CALL(ObjectKilled)(info);
+		return;
+	}
+
+	deathnotice_type = deathnotice_object_death;
+	setup_playerblock_vars(pKiller);
+	DETOUR_MEMBER_CALL(ObjectKilled)(info);
+	clear_playerblock_vars();
+	deathnotice_type = deathnotice_none;
+}
+
+void RemoveEntity(CBaseEntity *pEntity)
+{
+	servertools->RemoveEntity(pEntity);
+}
+
 void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 {
 	CBaseEntity *pEntity = servertools->FindEntityByClassname(nullptr, "player_manager");
@@ -1413,6 +1452,19 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 		}
 	}
 
+	if(!pObjectKilledDetour) {
+		CBaseEntity *pEntity = dictionary->FindFactory("obj_dispenser")->Create("obj_dispenser")->GetBaseEntity();
+
+		void **vtabl = *(void ***)pEntity;
+
+		void *KilledPtr = vtabl[CBaseObjectKilled];
+
+		pObjectKilledDetour = DETOUR_CREATE_MEMBER(ObjectKilled, KilledPtr)
+		pObjectKilledDetour->EnableDetour();
+
+		RemoveEntity(pEntity);
+	}
+
 	{
 		if(!player_block_vtable) {
 			void **base_vtabl = *(void ***)g_pGameRulesProxyEntity;
@@ -1439,15 +1491,6 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 	init_playerblock_userinfo();
 }
 
-enum deathnotice_type_t
-{
-	deathnotice_none,
-	deathnotice_npc_death,
-	deathnotice_player_death,
-	deathnotice_object_death
-};
-
-deathnotice_type_t deathnotice_type{deathnotice_none};
 edict_t *npc_edict{nullptr};
 
 int hook_getuserid(const edict_t *e)
@@ -1469,6 +1512,27 @@ int hook_getuserid(const edict_t *e)
 	}
 
 	RETURN_META_VALUE(MRES_IGNORED, 0);
+}
+
+const CSteamID *hook_getsteamid(edict_t *e)
+{
+	if(!e) {
+		RETURN_META_VALUE(MRES_SUPERCEDE, nullptr);
+	}
+
+	if(npc_edict != nullptr && e == npc_edict) {
+		RETURN_META_VALUE(MRES_SUPERCEDE, nullptr);
+	}
+
+	int idx = gamehelpers->IndexOfEdict(const_cast<edict_t *>(e));
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(idx);
+
+	npc_type ntype{pEntity ? g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
+	if(ntype == npc_custom) {
+		RETURN_META_VALUE(MRES_SUPERCEDE, nullptr);
+	}
+
+	RETURN_META_VALUE(MRES_IGNORED, nullptr);
 }
 
 void Sample::OnCoreMapEnd()
@@ -2142,13 +2206,15 @@ CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CB
 		return pPlayer;
 	}
 
-	if(npc_edict != nullptr && (pKiller != nullptr && pKiller->edict() == npc_edict)) {
-		return ((CBasePlayer *)player_block);
-	}
+	if(pKiller && deathnotice_type != deathnotice_none) {
+		if(npc_edict != nullptr && pKiller->edict() == npc_edict) {
+			return ((CBasePlayer *)player_block);
+		}
 
-	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
-	if(ntype == npc_custom) {
-		return ((CBasePlayer *)player_block);
+		npc_type ntype{g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname())};
+		if(ntype == npc_custom) {
+			return ((CBasePlayer *)player_block);
+		}
 	}
 
 	return nullptr;
@@ -2178,7 +2244,6 @@ bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 	}
 }
 
-//TODO!!!! CBaseObject::Killed
 void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info)
 {
 	CBaseEntity *pKiller{info.GetAttacker()};
@@ -2334,6 +2399,17 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 		return;
 	}
 
+	if(pKiller) {
+		if(npc_edict != nullptr && pKiller->edict() == npc_edict) {
+			return;
+		}
+
+		npc_type ntype{g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname())};
+		if(ntype == npc_custom) {
+			return;
+		}
+	}
+
 	DETOUR_MEMBER_CALL(SW_GameStats_WriteKill)(pKiller, pVictim, pAssister, event, info);
 }
 
@@ -2353,6 +2429,7 @@ bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool l
 	tf_flamethrower_boxsize = g_pCVar->FindVar("tf_flamethrower_boxsize");
 
 	SH_ADD_HOOK(IVEngineServer, GetPlayerUserId, engine, SH_STATIC(hook_getuserid), false);
+	SH_ADD_HOOK(IVEngineServer, GetClientSteamID, engine, SH_STATIC(hook_getsteamid), false);
 	SH_ADD_HOOK(IGameEventManager2, FireEvent, gameeventmanager, SH_STATIC(hook_fireevent), false);
 
 	dictionary = servertools->GetEntityFactoryDictionary();
@@ -2407,6 +2484,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
 
 	g_pGameConf->GetOffset("CTFWeaponBase::GetWeaponID", &CTFWeaponBaseGetWeaponID);
+
+	g_pGameConf->GetOffset("CBaseObject::Killed", &CBaseObjectKilled);
 #endif
 	
 	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
@@ -2493,6 +2572,10 @@ void Sample::SDK_OnUnload()
 {
 	g_pSDKHooks->RemoveEntityListener(this);
 	plsys->RemovePluginsListener(this);
+
+	if(pObjectKilledDetour) {
+		pObjectKilledDetour->Destroy();
+	}
 
 	smutils->RemoveGameFrameHook(game_frame);
 
