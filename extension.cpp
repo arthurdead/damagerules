@@ -110,6 +110,45 @@ void *CTFGameRulesApplyOnDamageAliveModifyRules = nullptr;
 #endif
 void *CBaseEntityTakeDamage = nullptr;
 
+enum MRESReturn
+{
+	MRES_ChangedHandled = -2,	// Use changed values and return MRES_Handled
+	MRES_ChangedOverride,		// Use changed values and return MRES_Override
+	MRES_Ignored,				// plugin didn't take any action
+	MRES_Handled,				// plugin did something, but real function should still be called
+	MRES_Override,				// call real function, but use my return value
+	MRES_Supercede				// skip real function; use my return value
+};
+
+static_assert(sizeof(MRESReturn) == sizeof(cell_t));
+
+bool mres_changed(MRESReturn res)
+{
+	switch(res) {
+		case MRES_ChangedHandled:
+		case MRES_ChangedOverride:
+		return true;
+	}
+
+	return false;
+}
+
+META_RES mres_to_meta_res(MRESReturn res)
+{
+	switch(res) {
+		case MRES_Ignored:
+		return MRES_IGNORED;
+		case MRES_ChangedHandled:
+		case MRES_Handled:
+		return MRES_HANDLED;
+		case MRES_ChangedOverride:
+		case MRES_Override:
+		return MRES_OVERRIDE;
+		case MRES_Supercede:
+		return MRES_SUPERCEDE;
+	}
+}
+
 template <typename T>
 T void_to_func(void *ptr)
 {
@@ -215,6 +254,7 @@ class CBaseCombatCharacter;
 int CBaseEntityOnTakeDamageOffset = -1;
 int CBaseEntityOnTakeDamage_AliveOffset = -1;
 void *CBasePlayerOnTakeDamagePtr = nullptr;
+int CBaseEntityEvent_KilledOtherOffset = -1;
 
 int m_iTeamNumOffset = -1;
 int m_iHealthOffset = -1;
@@ -291,6 +331,11 @@ public:
 		}
 
 		return *(int *)(((unsigned char *)this) + m_iHealthOffset);
+	}
+
+	void Event_KilledOther(CBaseEntity *pVictim, const CTakeDamageInfo &info)
+	{
+		call_vfunc<void, CBaseEntity, CBaseEntity *, const CTakeDamageInfo &>(this, CBaseEntityEvent_KilledOtherOffset, pVictim, info);
 	}
 };
 
@@ -801,6 +846,13 @@ static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *para
 	return SH_MCALL(pEntity, OnTakeDamageAlive)(info);
 }
 
+enum entity_type
+{
+	entity_any,
+	entity_npc,
+	entity_player,
+};
+
 struct callback_holder_t
 {
 	IPluginFunction *callback = nullptr;
@@ -810,88 +862,162 @@ struct callback_holder_t
 	IdentityToken_t *owner = nullptr;
 	bool erase = true;
 	int ref = -1;
+	entity_type type = entity_any;
 	
 	callback_holder_t(CBaseEntity *pEntity, int ref_, IdentityToken_t *owner_);
 	~callback_holder_t();
 	
-	void dtor(CBaseEntity *pEntity)
-	{
-		SH_REMOVE_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
-		SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
-		SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
-	}
+	void dtor(CBaseEntity *pEntity);
 
 	void HookEntityDtor();
-	
-	int HookOnTakeDamage(const CTakeDamageInfo &info)
+
+	META_RES SPOnTakeDamage(CTakeDamageInfo &info, int &result)
 	{
 		if(!callback) {
-			RETURN_META_VALUE(MRES_IGNORED, 0);
+			return MRES_IGNORED;
 		}
 
-		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL];
+		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
+		callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, SM_PARAM_COPYBACK);
+		callback->PushCellByRef((cell_t *)&result);
 		callback->PushCell(data);
-		cell_t res = 0;
-		callback->Execute(&res);
+		MRESReturn res = MRES_Ignored;
+		callback->Execute((cell_t *)&res);
+
+		if(mres_changed(res)) {
+			::AddrToDamageInfo(info, addr);
+		}
 		
-		RETURN_META_VALUE(MRES_SUPERCEDE, res);
+		return mres_to_meta_res(res);
+	}
+	
+	int HookOnTakeDamage(const CTakeDamageInfo &info)
+	{
+		CTakeDamageInfo info_copy = info;
+
+		int result = 0;
+		META_RES res = SPOnTakeDamage(info_copy, result);
+		
+		RETURN_META_VALUE(res, result);
 	}
 
-	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
+	META_RES SPOnTakeDamageAlive(CTakeDamageInfo &info, int &result)
 	{
 		if(!alive_callback) {
-			RETURN_META_VALUE(MRES_IGNORED, 0);
+			return MRES_IGNORED;
 		}
 
-		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL];
+		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
 		
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 		
 		alive_callback->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
 		alive_callback->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
+		alive_callback->PushCellByRef((cell_t *)&result);
 		alive_callback->PushCell(alive_data);
-		cell_t res = 0;
-		alive_callback->Execute(&res);
+		MRESReturn res = MRES_Ignored;
+		alive_callback->Execute((cell_t *)&res);
+
+		if(mres_changed(res)) {
+			::AddrToDamageInfo(info, addr);
+		}
 		
-		RETURN_META_VALUE(MRES_SUPERCEDE, res);
+		return mres_to_meta_res(res);
 	}
+
+	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
+	{
+		CTakeDamageInfo info_copy = info;
+
+		int result = 0;
+		META_RES res = SPOnTakeDamageAlive(info_copy, result);
+		
+		RETURN_META_VALUE(res, res);
+	}
+
+	void erase_from_map(int ref);
 };
 
 using callback_holder_map_t = std::unordered_map<int, callback_holder_t *>;
 callback_holder_map_t callbackmap{};
+callback_holder_map_t npc_callbackmap{};
+callback_holder_map_t player_callbackmap{};
+
+void callback_holder_t::erase_from_map(int ref)
+{
+	callbackmap.erase(ref);
+
+	switch(type) {
+		case entity_npc: {
+			npc_callbackmap.erase(ref);
+		} break;
+		case entity_player: {
+			player_callbackmap.erase(ref);
+		} break;
+	}
+}
 
 void callback_holder_t::HookEntityDtor()
 {
 	CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 	int this_ref = gamehelpers->EntityToBCompatRef(pEntity);
 	dtor(pEntity);
-	callbackmap.erase(this_ref);
+	erase_from_map(this_ref);
 	erase = false;
 	delete this;
 	RETURN_META(MRES_HANDLED);
 }
 
+void callback_holder_t::dtor(CBaseEntity *pEntity)
+{
+	SH_REMOVE_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
+	if(type != entity_npc) {
+		if(type != entity_player) {
+			SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+		}
+		SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+	}
+}
+
 callback_holder_t::callback_holder_t(CBaseEntity *pEntity, int ref_, IdentityToken_t *owner_)
 	: owner{owner_}, ref{ref_}
 {
+	if(pEntity->IsPlayer()) {
+		type = entity_player;
+	} else if(g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) == npc_custom) {
+		type = entity_npc;
+	}
+
 	SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
-	SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
-	SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+	if(type != entity_npc) {
+		SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+		if(type != entity_player) {
+			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+		}
+	}
 	
 	callbackmap.emplace(ref, this);
+
+	switch(type) {
+		case entity_npc: {
+			npc_callbackmap.emplace(ref, this);
+		} break;
+		case entity_player: {
+			player_callbackmap.emplace(ref, this);
+		} break;
+	}
 }
 
 callback_holder_t::~callback_holder_t()
 {
 	if(erase) {
-		callbackmap.erase(ref);
+		erase_from_map(ref);
 	}
 }
 
@@ -1027,6 +1153,14 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 		callback_holder_t *holder = it->second;
 
 		if(holder->owner == plugin->GetIdentity()) {
+			switch(holder->type) {
+				case entity_npc: {
+					npc_callbackmap.erase(holder->ref);
+				} break;
+				case entity_player: {
+					player_callbackmap.erase(holder->ref);
+				} break;
+			}
 			CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(holder->ref);
 			if(pEntity) {
 				holder->dtor(pEntity);
@@ -1277,10 +1411,11 @@ const char *g_szGameRulesProxy = nullptr;
 int CBaseEntityIsPlayer = -1;
 int CBaseEntityClassify = -1;
 int CBasePlayerIsBot = -1;
-int CBaseEntityEvent_KilledOtherOffset = -1;
 void *CBaseEntityEvent_KilledOtherPtr = nullptr;
 int CBaseEntityGetNetworkableOffset = -1;
 void *CBaseEntityGetNetworkable = nullptr;
+
+CBaseEntity *npc_ent{nullptr};
 
 class PlayerBlockVTable
 {
@@ -1298,6 +1433,13 @@ public:
 	bool IsBot()
 	{
 		return true;
+	}
+
+	void Event_KilledOther(CBaseEntity *pVictim, const CTakeDamageInfo &info)
+	{
+		if(npc_ent) {
+			npc_ent->Event_KilledOther(pVictim, info);
+		}
 	}
 };
 
@@ -1457,12 +1599,12 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 
 		void **vtabl = *(void ***)pEntity;
 
+		RemoveEntity(pEntity);
+
 		void *KilledPtr = vtabl[CBaseObjectKilled];
 
 		pObjectKilledDetour = DETOUR_CREATE_MEMBER(ObjectKilled, KilledPtr)
 		pObjectKilledDetour->EnableDetour();
-
-		RemoveEntity(pEntity);
 	}
 
 	{
@@ -1478,7 +1620,7 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
 			player_block_vtable[CBaseEntityClassify] = func_to_void(&PlayerBlockVTable::Classify);
 			player_block_vtable[CBasePlayerIsBot] = func_to_void(&PlayerBlockVTable::IsBot);
-			player_block_vtable[CBaseEntityEvent_KilledOtherOffset] = CBaseEntityEvent_KilledOtherPtr;
+			player_block_vtable[CBaseEntityEvent_KilledOtherOffset] = func_to_void(&PlayerBlockVTable::Event_KilledOther);
 		}
 
 		if(!player_block) {
@@ -1560,15 +1702,27 @@ class PlayerVTableHack : public CBasePlayer
 public:
 	int DetourOnTakeDamage( const CTakeDamageInfo &info )
 	{
-		CBasePlayer *pThis = (CBasePlayer *)this;
-
 		// Modify the amount of damage the player takes, based on skill.
 		CTakeDamageInfo playerDamage = info;
+
+		bool override_result = false;
+		int result_override = 0;
+
+		auto it{player_callbackmap.find(gamehelpers->EntityToBCompatRef(this))};
+		if(it != player_callbackmap.cend()) {
+			META_RES res = it->second->SPOnTakeDamage(playerDamage, result_override);
+			switch(res) {
+				case MRES_IGNORED: break;
+				case MRES_HANDLED: break;
+				case MRES_OVERRIDE: override_result = true; break;
+				case MRES_SUPERCEDE: return result_override;
+			}
+		}
 
 		// Should we run this damage through the skill level adjustment?
 		bool bAdjustForSkillLevel = true;
 
-		if( info.GetDamageType() == DMG_GENERIC && info.GetAttacker() == pThis && info.GetInflictor() == pThis )
+		if( info.GetDamageType() == DMG_GENERIC && info.GetAttacker() == this && info.GetInflictor() == this )
 		{
 			// Only do a skill level adjustment if the player isn't his own attacker AND inflictor.
 			// This prevents damage from SetHealth() inputs from being adjusted for skill level.
@@ -1580,7 +1734,12 @@ public:
 			playerDamage.AdjustPlayerDamageTakenForSkillLevel();
 		}
 
-		return CBasePlayer::OnTakeDamage( playerDamage );
+		int result = CBasePlayer::OnTakeDamage( playerDamage );
+		if(override_result) {
+			result = result_override;
+		}
+
+		return result;
 	}
 };
 
@@ -1863,6 +2022,20 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 
 	CTakeDamageInfo info = rawInfo;
 
+	bool override_result = false;
+	int result_override = 0;
+
+	auto it{npc_callbackmap.find(gamehelpers->EntityToBCompatRef(pThis))};
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPOnTakeDamage(info, result_override);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: override_result = true; break;
+			case MRES_SUPERCEDE: return result_override;
+		}
+	}
+
 #if SOURCE_ENGINE == SE_TF2
 	if ( g_pGameRules )
 	{
@@ -1900,6 +2073,10 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 #endif
 
 	int result = SH_MCALL(pThis, OnTakeDamage)( info );
+	if(override_result) {
+		result = result_override;
+	}
+
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
 
@@ -1912,13 +2089,27 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
 
+	CTakeDamageInfo info = rawInfo;
+
+	bool override_result = false;
+	int result_override = 0;
+
+	auto it{npc_callbackmap.find(gamehelpers->EntityToBCompatRef(pThis))};
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPOnTakeDamageAlive(info, result_override);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: override_result = true; break;
+			case MRES_SUPERCEDE: return result_override;
+		}
+	}
+
 	if ( !rawInfo.GetAttacker() || rawInfo.GetAttacker()->GetTeamNumber() == pThis->GetTeamNumber() )
 	{
 		// no friendly fire damage
-		RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+		RETURN_META_VALUE(MRES_SUPERCEDE, override_result ? result_override : 0);
 	}
-
-	CTakeDamageInfo info = rawInfo;
 
 	// weapon-specific damage modification
 	ModifyDamage( &info );
@@ -1939,7 +2130,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	{
 		float realDamage = ((CTFGameRules *)g_pGameRules)->ApplyOnDamageAliveModifyRules( info, pThis, outParams );
 		if(realDamage == -1.0f) {
-			RETURN_META_VALUE(MRES_SUPERCEDE, 0);
+			RETURN_META_VALUE(MRES_SUPERCEDE, override_result ? result_override : 0);
 		}
 
 		info.SetDamage( realDamage );
@@ -1996,6 +2187,9 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	}
 
 	int result = SH_MCALL(pThis, OnTakeDamageAlive)( info );
+	if(override_result) {
+		result = result_override;
+	}
 
 #if SOURCE_ENGINE == SE_TF2
 	// Let attacker react to the damage they dealt
@@ -2151,6 +2345,9 @@ void game_frame(bool simulating)
 	}
 }
 
+ConVar npc_deathnotice_eventtime( "npc_deathnotice_eventtime", "0.3" );
+ConVar npc_deathnotice_connecttime( "npc_deathnotice_connecttime", "0.1" );
+
 static void setup_playerblock_vars(CBaseEntity *pEntity)
 {
 	const char *name{pEntity->GetName()};
@@ -2161,10 +2358,10 @@ static void setup_playerblock_vars(CBaseEntity *pEntity)
 	update_playerblock_userinfo(name);
 
 	npc_death_notice_info.sending_event = true;
-	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
+	npc_death_notice_info.event_time = gpGlobals->curtime + npc_deathnotice_eventtime.GetFloat();
 
 	npc_death_notice_info.sending_connected = true;
-	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
+	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + npc_deathnotice_connecttime.GetFloat();
 
 	int team = pEntity->GetTeamNumber();
 
@@ -2185,8 +2382,9 @@ static void setup_playerblock_vars(CBaseEntity *pEntity)
 
 	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
 
-	npc_edict = pEntity->edict();
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	npc_ent = pEntity;
+	npc_edict = pEntity->edict();
 	m_Network->SetEdict(npc_edict);
 }
 
@@ -2195,8 +2393,9 @@ static void clear_playerblock_vars()
 	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
 
 	m_Network->SetEdict(nullptr);
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 	npc_edict = nullptr;
+	npc_ent = nullptr;
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 }
 
 CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
@@ -2207,7 +2406,7 @@ CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CB
 	}
 
 	if(pKiller && deathnotice_type != deathnotice_none) {
-		if(npc_edict != nullptr && pKiller->edict() == npc_edict) {
+		if(npc_ent != nullptr && npc_ent == pKiller) {
 			return ((CBasePlayer *)player_block);
 		}
 
@@ -2400,7 +2599,7 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 	}
 
 	if(pKiller) {
-		if(npc_edict != nullptr && pKiller->edict() == npc_edict) {
+		if(npc_ent != nullptr && npc_ent == pKiller) {
 			return;
 		}
 
