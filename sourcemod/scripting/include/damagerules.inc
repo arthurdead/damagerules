@@ -8,7 +8,6 @@
 #endif
 
 #include <sdkhooks>
-#include <dhooks>
 
 #if defined GAME_TF2
 #include <tf2_stocks>
@@ -65,7 +64,7 @@ enum
 
 #define CTakeDamageInfoVar any[]
 
-typedef ondamage_func_t = function MRESReturn (int entity, CTakeDamageInfo info, int &result, any data);
+typedef ondamage_func_t = function Action (int entity, CTakeDamageInfo info, int &result);
 
 #if defined GAME_TF2
 enum struct DamageModifyExtras_t
@@ -93,10 +92,10 @@ native int TakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
 
-native void SetEntityOnTakeDamage(int entity, ondamage_func_t func, any data = 0);
-native void SetEntityOnTakeDamageAlive(int entity, ondamage_func_t func, any data = 0);
+native void HookEntityOnTakeDamage(int entity, ondamage_func_t func);
+native void HookEntityOnTakeDamageAlive(int entity, ondamage_func_t func);
 
-stock MRESReturn baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result, any data)
+stock Action baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result, any data)
 {
 #if defined GAME_TF2
 	ApplyOnDamageModifyRules(info, entity, true);
@@ -118,10 +117,10 @@ stock MRESReturn baseline_ontakedamage(int entity, CTakeDamageInfo info, int &re
 #endif
 
 	result = CallOnTakeDamage(entity, info);
-	return MRES_Supercede;
+	return Plugin_Changed;
 }
 
-stock MRESReturn baseline_ontakedamagealive(int entity, CTakeDamageInfo info, int &result, any data)
+stock Action baseline_ontakedamagealive(int entity, CTakeDamageInfo info, int &result, any data)
 {
 #if defined GAME_TF2
 	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity, NULL_DAMAGE_MODIFY_EXTRA);
@@ -136,7 +135,7 @@ stock MRESReturn baseline_ontakedamagealive(int entity, CTakeDamageInfo info, in
 	}
 #endif
 
-	return MRES_Supercede;
+	return Plugin_Changed;
 }
 
 #if !defined REQUIRE_EXTENSIONS
