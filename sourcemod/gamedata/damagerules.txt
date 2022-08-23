@@ -147,6 +147,10 @@
 			{
 				"linux" "244"
 			}
+			"CBaseEntity::Event_KilledOther"
+			{
+				"linux" "68"
+			}
 		}
 	}
 }

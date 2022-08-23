@@ -1276,6 +1276,8 @@ const char *g_szGameRulesProxy = nullptr;
 int CBaseEntityIsPlayer = -1;
 int CBaseEntityClassify = -1;
 int CBasePlayerIsBot = -1;
+int CBaseEntityEvent_KilledOtherOffset = -1;
+void *CBaseEntityEvent_KilledOtherPtr = nullptr;
 int CBaseEntityGetNetworkableOffset = -1;
 void *CBaseEntityGetNetworkable = nullptr;
 
@@ -1391,12 +1393,6 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 	g_pGameRulesProxyEntity = FindEntityByServerClassname(0, g_szGameRulesProxy);
 	g_pGameRules = (CGameRules *)g_pSDKTools->GetGameRules();
 
-	if(!CBaseEntityGetNetworkable) {
-		void **vtabl = *(void ***)g_pGameRulesProxyEntity;
-
-		CBaseEntityGetNetworkable = vtabl[CBaseEntityGetNetworkableOffset];
-	}
-
 	if(!gamerules_vtable_assigned) {
 		if(g_pGameRules) {
 			void **vtabl = *(void ***)g_pGameRules;
@@ -1419,12 +1415,18 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 
 	{
 		if(!player_block_vtable) {
+			void **base_vtabl = *(void ***)g_pGameRulesProxyEntity;
+
+			CBaseEntityGetNetworkable = base_vtabl[CBaseEntityGetNetworkableOffset];
+			CBaseEntityEvent_KilledOtherPtr = base_vtabl[CBaseEntityEvent_KilledOtherOffset];
+
 			player_block_vtable = new void *[CBasePlayerIsBot];
 
 			player_block_vtable[CBaseEntityGetNetworkableOffset] = CBaseEntityGetNetworkable;
 			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
 			player_block_vtable[CBaseEntityClassify] = func_to_void(&PlayerBlockVTable::Classify);
 			player_block_vtable[CBasePlayerIsBot] = func_to_void(&PlayerBlockVTable::IsBot);
+			player_block_vtable[CBaseEntityEvent_KilledOtherOffset] = CBaseEntityEvent_KilledOtherPtr;
 		}
 
 		if(!player_block) {
@@ -1437,13 +1439,32 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 	init_playerblock_userinfo();
 }
 
-bool in_npc_death_notice = false;
-bool in_player_death_notice = false;
+enum deathnotice_type_t
+{
+	deathnotice_none,
+	deathnotice_npc_death,
+	deathnotice_player_death,
+	deathnotice_object_death
+};
+
+deathnotice_type_t deathnotice_type{deathnotice_none};
 edict_t *npc_edict{nullptr};
 
 int hook_getuserid(const edict_t *e)
 {
-	if((in_npc_death_notice || in_player_death_notice) && e == npc_edict) {
+	if(!e) {
+		RETURN_META_VALUE(MRES_IGNORED, 0);
+	}
+
+	if(npc_edict != nullptr && e == npc_edict) {
+		RETURN_META_VALUE(MRES_SUPERCEDE, PLAYER_BLOCK_USERID);
+	}
+
+	int idx = gamehelpers->IndexOfEdict(const_cast<edict_t *>(e));
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(idx);
+
+	npc_type ntype{pEntity ? g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
+	if(ntype == npc_custom) {
 		RETURN_META_VALUE(MRES_SUPERCEDE, PLAYER_BLOCK_USERID);
 	}
 
@@ -2066,6 +2087,54 @@ void game_frame(bool simulating)
 	}
 }
 
+static void setup_playerblock_vars(CBaseEntity *pEntity)
+{
+	const char *name{pEntity->GetName()};
+	if(!name || name[0] == '\0') {
+		name = pEntity->GetClassname();
+	}
+
+	update_playerblock_userinfo(name);
+
+	npc_death_notice_info.sending_event = true;
+	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
+
+	npc_death_notice_info.sending_connected = true;
+	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
+
+	int team = pEntity->GetTeamNumber();
+
+	npc_death_notice_info.sending_team = true;
+	npc_death_notice_info.team_time = npc_death_notice_info.connected_time;
+	npc_death_notice_info.team = team;
+
+	npc_death_notice_info.sending_name = true;
+	npc_death_notice_info.name_time = npc_death_notice_info.connected_time;
+	npc_death_notice_info.name = name;
+
+	CBaseEntity *pPlayerManager = gamehelpers->ReferenceToEntity(player_manager_ref);
+	if(pPlayerManager) {
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bConnected_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bValid_offset);
+		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_iTeam_offset);
+	}
+
+	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+
+	npc_edict = pEntity->edict();
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	m_Network->SetEdict(npc_edict);
+}
+
+static void clear_playerblock_vars()
+{
+	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+
+	m_Network->SetEdict(nullptr);
+	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
+	npc_edict = nullptr;
+}
+
 CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
 {
 	CBasePlayer *pPlayer{CTFGameRules::GetDeathScorer(pKiller, pInflictor)};
@@ -2073,7 +2142,12 @@ CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CB
 		return pPlayer;
 	}
 
-	if(in_player_death_notice) {
+	if(npc_edict != nullptr && (pKiller != nullptr && pKiller->edict() == npc_edict)) {
+		return ((CBasePlayer *)player_block);
+	}
+
+	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
+	if(ntype == npc_custom) {
 		return ((CBasePlayer *)player_block);
 	}
 
@@ -2083,8 +2157,7 @@ CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CB
 bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 {
 	if(npc_death_notice_info.in_fire_event ||
-		(!in_npc_death_notice &&
-		!in_player_death_notice)) {
+		(deathnotice_type == deathnotice_none)) {
 		RETURN_META_VALUE(MRES_IGNORED, false);
 	}
 
@@ -2105,106 +2178,35 @@ bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 	}
 }
 
+//TODO!!!! CBaseObject::Killed
 void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info)
 {
 	CBaseEntity *pKiller{info.GetAttacker()};
+
 	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
-	bool is_npc{ntype == npc_custom};
-	if(!is_npc) {
+	if(ntype != npc_custom) {
 		CMultiplayRules::DeathNotice(pVictim, info);
 		return;
 	}
 
-	const char *name{pKiller->GetName()};
-	if(!name || name[0] == '\0') {
-		name = pKiller->GetClassname();
-	}
-
-	update_playerblock_userinfo(name);
-
-	npc_death_notice_info.sending_event = true;
-	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
-
-	npc_death_notice_info.sending_connected = true;
-	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
-
-	int team = pKiller->GetTeamNumber();
-
-	npc_death_notice_info.sending_team = true;
-	npc_death_notice_info.team_time = npc_death_notice_info.connected_time;
-	npc_death_notice_info.team = team;
-
-	npc_death_notice_info.sending_name = true;
-	npc_death_notice_info.name_time = npc_death_notice_info.connected_time;
-	npc_death_notice_info.name = name;
-
-	CBaseEntity *pPlayerManager = gamehelpers->ReferenceToEntity(player_manager_ref);
-	if(pPlayerManager) {
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bConnected_offset);
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bValid_offset);
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_iTeam_offset);
-	}
-
-	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
-
-	in_player_death_notice = true;
-	npc_edict = pKiller->edict();
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
-	m_Network->SetEdict(npc_edict);
+	deathnotice_type = deathnotice_player_death;
+	setup_playerblock_vars(pKiller);
 	CMultiplayRules::DeathNotice(pVictim, info);
-	m_Network->SetEdict(nullptr);
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
-	npc_edict = nullptr;
-	in_player_death_notice = false;
+	clear_playerblock_vars();
+	deathnotice_type = deathnotice_none;
 }
 
 void NPCDeathNotice(CBaseEntity *pVictim, const CTakeDamageInfo &info, const char *eventName)
 {
-	const char *name{pVictim->GetName()};
-	if(!name || name[0] == '\0') {
-		name = pVictim->GetClassname();
-	}
-
-	update_playerblock_userinfo(name);
-
-	npc_death_notice_info.sending_event = true;
-	npc_death_notice_info.event_time = gpGlobals->curtime + 0.2f;
-
-	npc_death_notice_info.sending_connected = true;
-	npc_death_notice_info.connected_time = npc_death_notice_info.event_time + 0.2f;
-
-	int team = pVictim->GetTeamNumber();
-
-	npc_death_notice_info.sending_team = true;
-	npc_death_notice_info.team_time = npc_death_notice_info.connected_time;
-	npc_death_notice_info.team = team;
-
-	npc_death_notice_info.sending_name = true;
-	npc_death_notice_info.name_time = npc_death_notice_info.connected_time;
-	npc_death_notice_info.name = name;
-
-	CBaseEntity *pPlayerManager = gamehelpers->ReferenceToEntity(player_manager_ref);
-	if(pPlayerManager) {
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bConnected_offset);
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_bValid_offset);
-		SetEdictStateChanged(pPlayerManager, npc_death_notice_info.m_iTeam_offset);
-	}
-
-	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
-
-	in_npc_death_notice = true;
-	npc_edict = pVictim->edict();
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
-	m_Network->SetEdict(npc_edict);
+	deathnotice_type = deathnotice_npc_death;
+	setup_playerblock_vars(pVictim);
 	if(eventName) {
 		((CTFGameRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info, eventName);
 	} else {
 		((CMultiplayRules *)g_pGameRules)->DeathNotice((CBasePlayer *)player_block, info);
 	}
-	m_Network->SetEdict(nullptr);
-	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
-	npc_edict = nullptr;
-	in_npc_death_notice = false;
+	clear_playerblock_vars();
+	deathnotice_type = deathnotice_none;
 }
 
 void hook_npc_killed(const CTakeDamageInfo &info)
@@ -2328,8 +2330,7 @@ CDetour *pSW_GameStats_WriteKill = nullptr;
 
 DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer*, pVictim, CTFPlayer*, pAssister, IGameEvent*, event, const CTakeDamageInfo &,info )
 {
-	if(in_npc_death_notice ||
-		in_player_death_notice) {
+	if(deathnotice_type != deathnotice_none) {
 		return;
 	}
 
@@ -2436,6 +2437,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
 	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
 	g_pGameConf->GetOffset("CBasePlayer::IsBot", &CBasePlayerIsBot);
+	g_pGameConf->GetOffset("CBaseEntity::Event_KilledOther", &CBaseEntityEvent_KilledOtherOffset);
 
 	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
 
