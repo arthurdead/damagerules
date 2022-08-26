@@ -826,6 +826,8 @@ static META_RES res_to_meta_res(cell_t res)
 		case Pl_Stop:
 		return MRES_SUPERCEDE;
 	}
+
+	return MRES_HANDLED;
 }
 
 struct callback_holder_t
@@ -2111,6 +2113,23 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 		result = result_override;
 	}
 
+#if SOURCE_ENGINE == SE_TF2
+	if(info.GetDamageType() & DMG_BURN) {
+		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
+
+		if(attackerWeapon) {
+			switch(attackerWeapon->GetWeaponID()) {
+				case TF_WEAPON_FLAREGUN:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
+				case TF_WEAPON_PARTICLE_CANNON:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
+			}
+		}
+
+		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
+	}
+#endif
+
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
 
@@ -2169,22 +2188,12 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 		info.SetDamage( realDamage );
 	}
-
-	if(outParams.bIgniting || (info.GetDamageType() & DMG_BURN)) {
-		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
-
-		if(attackerWeapon) {
-			switch(attackerWeapon->GetWeaponID()) {
-				case TF_WEAPON_FLAREGUN:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
-				case TF_WEAPON_PARTICLE_CANNON:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
-			}
-		}
-
-		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
-	}
 #endif
+
+	int result = SH_MCALL(pThis, OnTakeDamageAlive)( info );
+	if(override_result) {
+		result = result_override;
+	}
 
 	// fire event for client combat text, beep, etc.
 	IGameEvent *event = gameeventmanager->CreateEvent( "npc_hurt" );
@@ -2220,10 +2229,22 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 		gameeventmanager->FireEvent( event );
 	}
 
-	int result = SH_MCALL(pThis, OnTakeDamageAlive)( info );
-	if(override_result) {
-		result = result_override;
+#if SOURCE_ENGINE == SE_TF2
+	if(outParams.bIgniting || (info.GetDamageType() & DMG_BURN)) {
+		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
+
+		if(attackerWeapon) {
+			switch(attackerWeapon->GetWeaponID()) {
+				case TF_WEAPON_FLAREGUN:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
+				case TF_WEAPON_PARTICLE_CANNON:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
+			}
+		}
+
+		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
 	}
+#endif
 
 #if SOURCE_ENGINE == SE_TF2
 	// Let attacker react to the damage they dealt
