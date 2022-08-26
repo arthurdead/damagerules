@@ -967,7 +967,7 @@ void callback_holder_t::erase_from_map(int ref)
 void callback_holder_t::HookEntityDtor()
 {
 	CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
-	int this_ref = gamehelpers->EntityToBCompatRef(pEntity);
+	int this_ref = gamehelpers->EntityToReference(pEntity);
 	dtor(pEntity);
 	erase_from_map(this_ref);
 	erase = false;
@@ -1081,7 +1081,7 @@ static cell_t SetEntityOnTakeDamage(IPluginContext *pContext, const cell_t *para
 	
 	callback_holder_t *holder = nullptr;
 
-	int ref = gamehelpers->EntityToBCompatRef(pEntity);
+	int ref = gamehelpers->EntityToReference(pEntity);
 	
 	callback_holder_map_t::iterator it{callbackmap.find(ref)};
 	if(it != callbackmap.end()) {
@@ -1116,7 +1116,7 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 	
 	callback_holder_t *holder = nullptr;
 
-	int ref = gamehelpers->EntityToBCompatRef(pEntity);
+	int ref = gamehelpers->EntityToReference(pEntity);
 	
 	callback_holder_map_t::iterator it{callbackmap.find(ref)};
 	if(it != callbackmap.end()) {
@@ -1604,7 +1604,7 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 {
 	CBaseEntity *pEntity = servertools->FindEntityByClassname(nullptr, "player_manager");
 	if(pEntity) {
-		player_manager_ref = gamehelpers->EntityToBCompatRef(pEntity);
+		player_manager_ref = gamehelpers->EntityToReference(pEntity);
 	}
 
 	g_pGameRulesProxyEntity = FindEntityByServerClassname(0, g_szGameRulesProxy);
@@ -1744,7 +1744,7 @@ public:
 		bool override_result = false;
 		int result_override = 0;
 
-		auto it{player_callbackmap.find(gamehelpers->EntityToBCompatRef(this))};
+		auto it{player_callbackmap.find(gamehelpers->EntityToReference(this))};
 		if(it != player_callbackmap.cend()) {
 			META_RES res = it->second->SPOnTakeDamage(this, playerDamage, result_override);
 			switch(res) {
@@ -2061,7 +2061,7 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 	bool override_result = false;
 	int result_override = 0;
 
-	auto it{npc_callbackmap.find(gamehelpers->EntityToBCompatRef(pThis))};
+	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
 		META_RES res = it->second->SPOnTakeDamage(pThis, info, result_override);
 		switch(res) {
@@ -2147,7 +2147,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	bool override_result = false;
 	int result_override = 0;
 
-	auto it{npc_callbackmap.find(gamehelpers->EntityToBCompatRef(pThis))};
+	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
 		META_RES res = it->second->SPOnTakeDamageAlive(pThis, info, result_override);
 		switch(res) {
