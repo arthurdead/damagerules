@@ -65,6 +65,7 @@ enum
 #define CTakeDamageInfoVar any[]
 
 typedef ondamage_func_t = function Action (int entity, CTakeDamageInfo info, int &result);
+typedef killed_func_t = function Action (int entity, CTakeDamageInfo info);
 
 #if defined GAME_TF2
 enum struct DamageModifyExtras_t
@@ -91,11 +92,13 @@ native int TakeDamage(int entity, const CTakeDamageInfoVar info);
 
 native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
+//native void CallKilled(int entity, const CTakeDamageInfoVar info);
 
-native void HookEntityOnTakeDamage(int entity, ondamage_func_t func);
-native void HookEntityOnTakeDamageAlive(int entity, ondamage_func_t func);
+native void HookEntityOnTakeDamage(int entity, ondamage_func_t func, bool post);
+native void HookEntityOnTakeDamageAlive(int entity, ondamage_func_t func, bool post);
+native void HookEntityKilled(int entity, killed_func_t func, bool post);
 
-stock Action baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result, any data)
+stock Action baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result)
 {
 #if defined GAME_TF2
 	ApplyOnDamageModifyRules(info, entity, true);
@@ -120,7 +123,7 @@ stock Action baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result
 	return Plugin_Changed;
 }
 
-stock Action baseline_ontakedamagealive(int entity, CTakeDamageInfo info, int &result, any data)
+stock Action baseline_ontakedamagealive(int entity, CTakeDamageInfo info, int &result)
 {
 #if defined GAME_TF2
 	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity, NULL_DAMAGE_MODIFY_EXTRA);

@@ -774,6 +774,7 @@ SH_DECL_MANUALHOOK0_void(GenericDtor, 1, 0, 0)
 
 SH_DECL_MANUALHOOK1(OnTakeDamage, 0, 0, 0, int, const CTakeDamageInfo &)
 SH_DECL_MANUALHOOK1(OnTakeDamageAlive, 0, 0, 0, int, const CTakeDamageInfo &)
+SH_DECL_MANUALHOOK1_void(Event_Killed, 0, 0, 0, const CTakeDamageInfo &)
 
 static cell_t CallOnTakeDamage(IPluginContext *pContext, const cell_t *params)
 {
@@ -830,12 +831,27 @@ static META_RES res_to_meta_res(cell_t res)
 	return MRES_HANDLED;
 }
 
-struct callback_holder_t
+#define NUM_CALLBACKS 3
+
+struct callback_t
 {
 	IChangeableForward *fwd = nullptr;
 	bool hooked = false;
-	IChangeableForward *alive_fwd = nullptr;
-	bool hooked_alive = false;
+};
+
+struct callback_holder_t
+{
+	callback_t callbacks[NUM_CALLBACKS][2];
+
+	callback_t &takedmg(bool post)
+	{ return callbacks[0][post ? 1 : 0]; }
+
+	callback_t &takedmgalive(bool post)
+	{ return callbacks[1][post ? 1 : 0]; }
+
+	callback_t &killed(bool post)
+	{ return callbacks[2][post ? 1 : 0]; }
+
 	std::vector<IdentityToken_t *> owners{};
 	bool erase = true;
 	int ref = -1;
@@ -848,8 +864,10 @@ struct callback_holder_t
 
 	void HookEntityDtor();
 
-	META_RES SPOnTakeDamage(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result)
+	META_RES SPOnTakeDamage(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result, bool post)
 	{
+		IChangeableForward *fwd{takedmg(post).fwd};
+
 		if(!fwd || fwd->GetFunctionCount() == 0) {
 			return MRES_IGNORED;
 		}
@@ -872,32 +890,46 @@ struct callback_holder_t
 		return res_to_meta_res(res);
 	}
 	
-	int HookOnTakeDamage(const CTakeDamageInfo &info)
+	int HookOnTakeDamage_pre(const CTakeDamageInfo &info)
 	{
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 
 		CTakeDamageInfo info_copy = info;
 
 		int result = 0;
-		META_RES res = SPOnTakeDamage(pEntity, info_copy, result);
+		META_RES res = SPOnTakeDamage(pEntity, info_copy, result, false);
 		
 		RETURN_META_VALUE(res, result);
 	}
 
-	META_RES SPOnTakeDamageAlive(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result)
+	int HookOnTakeDamage_post(const CTakeDamageInfo &info)
 	{
-		if(!alive_fwd || alive_fwd->GetFunctionCount() == 0) {
+		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+
+		CTakeDamageInfo info_copy = info;
+
+		int result = 0;
+		META_RES res = SPOnTakeDamage(pEntity, info_copy, result, true);
+		
+		RETURN_META_VALUE(res, result);
+	}
+
+	META_RES SPOnTakeDamageAlive(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result, bool post)
+	{
+		IChangeableForward *fwd{takedmgalive(post).fwd};
+
+		if(!fwd || fwd->GetFunctionCount() == 0) {
 			return MRES_IGNORED;
 		}
 
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
 		
-		alive_fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		alive_fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
-		alive_fwd->PushCellByRef((cell_t *)&result);
+		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
+		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
+		fwd->PushCellByRef((cell_t *)&result);
 		cell_t res = 0;
-		alive_fwd->Execute(&res);
+		fwd->Execute(&res);
 
 		if(res == Pl_Changed) {
 			::AddrToDamageInfo(info, addr);
@@ -908,39 +940,124 @@ struct callback_holder_t
 		return res_to_meta_res(res);
 	}
 
-	int HookOnTakeDamageAlive(const CTakeDamageInfo &info)
+	int HookOnTakeDamageAlive_pre(const CTakeDamageInfo &info)
 	{
 		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 
 		CTakeDamageInfo info_copy = info;
 
 		int result = 0;
-		META_RES res = SPOnTakeDamageAlive(pEntity, info_copy, result);
+		META_RES res = SPOnTakeDamageAlive(pEntity, info_copy, result, false);
 		
-		RETURN_META_VALUE(res, res);
+		RETURN_META_VALUE(res, result);
+	}
+
+	int HookOnTakeDamageAlive_post(const CTakeDamageInfo &info)
+	{
+		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+
+		CTakeDamageInfo info_copy = info;
+
+		int result = 0;
+		META_RES res = SPOnTakeDamageAlive(pEntity, info_copy, result, true);
+		
+		RETURN_META_VALUE(res, result);
+	}
+
+	META_RES SPEvent_Killed(CBaseEntity *pEntity, CTakeDamageInfo &info, bool post)
+	{
+		IChangeableForward *fwd{killed(post).fwd};
+
+		if(!fwd || fwd->GetFunctionCount() == 0) {
+			return MRES_IGNORED;
+		}
+
+		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
+		::DamageInfoToAddr(info, addr);
+		
+		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
+		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
+		cell_t res = 0;
+		fwd->Execute(&res);
+
+		if(res == Pl_Changed) {
+			::AddrToDamageInfo(info, addr);
+		}
+		
+		return res_to_meta_res(res);
+	}
+
+	void HookEvent_Killed_pre(const CTakeDamageInfo &info)
+	{
+		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+
+		CTakeDamageInfo info_copy = info;
+
+		META_RES res = SPEvent_Killed(pEntity, info_copy, false);
+		
+		RETURN_META(res);
+	}
+
+	void HookEvent_Killed_post(const CTakeDamageInfo &info)
+	{
+		CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
+
+		CTakeDamageInfo info_copy = info;
+
+		META_RES res = SPEvent_Killed(pEntity, info_copy, true);
+		
+		RETURN_META(res);
 	}
 
 	void erase_from_map(int ref);
 
-	void create_fwd(CBaseEntity *pEntity)
+	void create_takedmg_fwd(CBaseEntity *pEntity, bool post)
 	{
-		fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		callback_t &callback{takedmg(post)};
+
+		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
 
 		if(type != entity_npc) {
 			if(type != entity_player) {
-				SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
-				hooked = true;
+				if(!post) {
+					SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_pre), false);
+				} else {
+					SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_post), true);
+				}
+				callback.hooked = true;
 			}
 		}
 	}
 
-	void create_alive_fwd(CBaseEntity *pEntity)
+	void create_takedmgalive_fwd(CBaseEntity *pEntity, bool post)
 	{
-		alive_fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		callback_t &callback{takedmgalive(post)};
+
+		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
 
 		if(type != entity_npc) {
-			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
-			hooked_alive = true;
+			if(!post) {
+				SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_pre), false);
+			} else {
+				SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_post), true);
+			}
+			callback.hooked = true;
+		}
+	}
+
+	void create_killed_fwd(CBaseEntity *pEntity, bool post)
+	{
+		callback_t &callback{killed(post)};
+
+		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 2, nullptr, Param_Cell, Param_Array);
+
+		if(type != entity_npc) {
+			if(!post) {
+				SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_pre), false);
+			} else {
+				SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_post), true);
+			}
+			callback.hooked = true;
 		}
 	}
 };
@@ -981,12 +1098,24 @@ void callback_holder_t::dtor(CBaseEntity *pEntity)
 
 	if(type != entity_npc) {
 		if(type != entity_player) {
-			if(hooked) {
-				SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage), false);
+			if(takedmg(false).hooked) {
+				SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_pre), false);
+			}
+			if(takedmg(true).hooked) {
+				SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_post), true);
 			}
 		}
-		if(hooked_alive) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive), false);
+		if(takedmgalive(false).hooked) {
+			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_pre), false);
+		}
+		if(takedmgalive(true).hooked) {
+			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_post), true);
+		}
+		if(killed(false).hooked) {
+			SH_REMOVE_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_pre), false);
+		}
+		if(killed(true).hooked) {
+			SH_REMOVE_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_post), true);
 		}
 	}
 }
@@ -1016,12 +1145,14 @@ callback_holder_t::callback_holder_t(CBaseEntity *pEntity, int ref_)
 
 callback_holder_t::~callback_holder_t()
 {
-	if(fwd) {
-		forwards->ReleaseForward(fwd);
-	}
-
-	if(alive_fwd) {
-		forwards->ReleaseForward(alive_fwd);
+	for(size_t i{0}; i < NUM_CALLBACKS; ++i) {
+		callback_t *callback{callbacks[i]};
+		if(callback[0].fwd) {
+			forwards->ReleaseForward(callback[0].fwd);
+		}
+		if(callback[1].fwd) {
+			forwards->ReleaseForward(callback[1].fwd);
+		}
 	}
 
 	if(erase) {
@@ -1090,14 +1221,18 @@ static cell_t SetEntityOnTakeDamage(IPluginContext *pContext, const cell_t *para
 		holder = new callback_holder_t{pEntity, ref};
 	}
 
-	if(!holder->fwd) {
-		holder->create_fwd(pEntity);
+	bool post = params[3];
+
+	callback_t &callback{holder->takedmg(post)};
+
+	if(!callback.fwd) {
+		holder->create_takedmg_fwd(pEntity, post);
 	}
-	
+
 	IPluginFunction *func = pContext->GetFunctionById(params[2]);
 
-	holder->fwd->RemoveFunction(func);
-	holder->fwd->AddFunction(func);
+	callback.fwd->RemoveFunction(func);
+	callback.fwd->AddFunction(func);
 
 	IdentityToken_t *iden{pContext->GetIdentity()};
 	if(std::find(holder->owners.cbegin(), holder->owners.cend(), iden) == holder->owners.cend()) {
@@ -1125,14 +1260,57 @@ static cell_t SetEntityOnTakeDamageAlive(IPluginContext *pContext, const cell_t 
 		holder = new callback_holder_t{pEntity, ref};
 	}
 
-	if(!holder->alive_fwd) {
-		holder->create_alive_fwd(pEntity);
+	bool post = params[3];
+
+	callback_t &callback{holder->takedmgalive(post)};
+
+	if(!callback.fwd) {
+		holder->create_takedmgalive_fwd(pEntity, post);
 	}
-	
+
 	IPluginFunction *func = pContext->GetFunctionById(params[2]);
 
-	holder->alive_fwd->RemoveFunction(func);
-	holder->alive_fwd->AddFunction(func);
+	callback.fwd->RemoveFunction(func);
+	callback.fwd->AddFunction(func);
+
+	IdentityToken_t *iden{pContext->GetIdentity()};
+	if(std::find(holder->owners.cbegin(), holder->owners.cend(), iden) == holder->owners.cend()) {
+		holder->owners.emplace_back(iden);
+	}
+	
+	return 0;
+}
+
+static cell_t HookEntityKilled(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	callback_holder_t *holder = nullptr;
+
+	int ref = gamehelpers->EntityToReference(pEntity);
+	
+	callback_holder_map_t::iterator it{callbackmap.find(ref)};
+	if(it != callbackmap.end()) {
+		holder = it->second;
+	} else {
+		holder = new callback_holder_t{pEntity, ref};
+	}
+
+	bool post = params[3];
+
+	callback_t &callback{holder->killed(post)};
+
+	if(!callback.fwd) {
+		holder->create_killed_fwd(pEntity, post);
+	}
+
+	IPluginFunction *func = pContext->GetFunctionById(params[2]);
+
+	callback.fwd->RemoveFunction(func);
+	callback.fwd->AddFunction(func);
 
 	IdentityToken_t *iden{pContext->GetIdentity()};
 	if(std::find(holder->owners.cbegin(), holder->owners.cend(), iden) == holder->owners.cend()) {
@@ -1155,6 +1333,7 @@ static const sp_nativeinfo_t g_sNativesInfo[] =
 	{"CallOnTakeDamageAlive", CallOnTakeDamageAlive},
 	{"HookEntityOnTakeDamage", SetEntityOnTakeDamage},
 	{"HookEntityOnTakeDamageAlive", SetEntityOnTakeDamageAlive},
+	{"HookEntityKilled", HookEntityKilled},
 	{"TakeDamage", TakeDamage},
 	{nullptr, nullptr},
 };
@@ -1177,14 +1356,16 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 
 			size_t func_count{0};
 
-			if(holder->fwd) {
-				holder->fwd->RemoveFunctionsOfPlugin(plugin);
-				func_count += holder->fwd->GetFunctionCount();
-			}
-
-			if(holder->alive_fwd) {
-				holder->alive_fwd->RemoveFunctionsOfPlugin(plugin);
-				func_count += holder->alive_fwd->GetFunctionCount();
+			for(size_t i{0}; i < NUM_CALLBACKS; ++i) {
+				callback_t *callback{holder->callbacks[i]};
+				if(callback[0].fwd) {
+					callback[0].fwd->RemoveFunctionsOfPlugin(plugin);
+					func_count += callback[0].fwd->GetFunctionCount();
+				}
+				if(callback[1].fwd) {
+					callback[1].fwd->RemoveFunctionsOfPlugin(plugin);
+					func_count += callback[1].fwd->GetFunctionCount();
+				}
 			}
 
 			if(func_count == 0) {
@@ -1746,7 +1927,7 @@ public:
 
 		auto it{player_callbackmap.find(gamehelpers->EntityToReference(this))};
 		if(it != player_callbackmap.cend()) {
-			META_RES res = it->second->SPOnTakeDamage(this, playerDamage, result_override);
+			META_RES res = it->second->SPOnTakeDamage(this, playerDamage, result_override, false);
 			switch(res) {
 				case MRES_IGNORED: break;
 				case MRES_HANDLED: break;
@@ -1771,6 +1952,17 @@ public:
 		}
 
 		int result = CBasePlayer::OnTakeDamage( playerDamage );
+
+		if(it != player_callbackmap.cend()) {
+			META_RES res = it->second->SPOnTakeDamage(this, playerDamage, result_override, true);
+			switch(res) {
+				case MRES_IGNORED: break;
+				case MRES_HANDLED: break;
+				case MRES_OVERRIDE: override_result = true; break;
+				case MRES_SUPERCEDE: return result_override;
+			}
+		}
+
 		if(override_result) {
 			result = result_override;
 		}
@@ -1778,8 +1970,6 @@ public:
 		return result;
 	}
 };
-
-SH_DECL_MANUALHOOK1_void(Event_Killed, 0, 0, 0, const CTakeDamageInfo &)
 
 #define TF_BURNING_FLAME_LIFE		10.0
 #define TF_BURNING_FLAME_LIFE_PYRO	0.25		// pyro only displays burning effect momentarily
@@ -2063,7 +2253,7 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 
 	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
-		META_RES res = it->second->SPOnTakeDamage(pThis, info, result_override);
+		META_RES res = it->second->SPOnTakeDamage(pThis, info, result_override, false);
 		switch(res) {
 			case MRES_IGNORED: break;
 			case MRES_HANDLED: break;
@@ -2109,6 +2299,17 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 #endif
 
 	int result = SH_MCALL(pThis, OnTakeDamage)( info );
+
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPOnTakeDamage(pThis, info, result_override, false);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: override_result = true; break;
+			case MRES_SUPERCEDE: return result_override;
+		}
+	}
+
 	if(override_result) {
 		result = result_override;
 	}
@@ -2149,7 +2350,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
-		META_RES res = it->second->SPOnTakeDamageAlive(pThis, info, result_override);
+		META_RES res = it->second->SPOnTakeDamageAlive(pThis, info, result_override, false);
 		switch(res) {
 			case MRES_IGNORED: break;
 			case MRES_HANDLED: break;
@@ -2191,6 +2392,17 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 #endif
 
 	int result = SH_MCALL(pThis, OnTakeDamageAlive)( info );
+
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPOnTakeDamageAlive(pThis, info, result_override, true);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: override_result = true; break;
+			case MRES_SUPERCEDE: return result_override;
+		}
+	}
+
 	if(override_result) {
 		result = result_override;
 	}
@@ -2546,9 +2758,32 @@ void hook_npc_killed(const CTakeDamageInfo &info)
 		eventName = "fish_notice";
 	}
 
+	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPEvent_Killed(pThis, info_copy, false);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: break;
+			case MRES_SUPERCEDE: return;
+		}
+	}
+
 	NPCDeathNotice(pThis, info_copy, eventName);
 
-	RETURN_META(MRES_HANDLED);
+	SH_MCALL(pThis, Event_Killed)(info_copy);
+
+	if(it != npc_callbackmap.cend()) {
+		META_RES res = it->second->SPEvent_Killed(pThis, info_copy, true);
+		switch(res) {
+			case MRES_IGNORED: break;
+			case MRES_HANDLED: break;
+			case MRES_OVERRIDE: break;
+			case MRES_SUPERCEDE: return;
+		}
+	}
+
+	RETURN_META(MRES_SUPERCEDE);
 }
 
 void hook_npc_dtor()
@@ -2558,7 +2793,7 @@ void hook_npc_dtor()
 	SH_REMOVE_MANUALHOOK(GenericDtor, pThis, SH_STATIC(hook_npc_dtor), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamage, pThis, SH_STATIC(hook_npc_takedamage), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pThis, SH_STATIC(hook_npc_takedamagealive), false);
-	SH_REMOVE_MANUALHOOK(Event_Killed, pThis, SH_STATIC(hook_npc_killed), true);
+	SH_REMOVE_MANUALHOOK(Event_Killed, pThis, SH_STATIC(hook_npc_killed), false);
 }
 
 void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
@@ -2582,7 +2817,7 @@ void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
 			SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_STATIC(hook_npc_dtor), false);
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
 			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_STATIC(hook_npc_takedamagealive), false);
-			SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_STATIC(hook_npc_killed), true);
+			SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_STATIC(hook_npc_killed), false);
 		}
 	}
 }
