@@ -23,6 +23,8 @@ enum ECritType
 }
 #endif
 
+#define BASEDAMAGE_NOT_SPECIFIED 340282346638528859811704183484516925440.000000
+
 enum struct CTakeDamageInfo
 {
 	float m_vecDamageForce[3];
@@ -49,6 +51,23 @@ enum struct CTakeDamageInfo
 #elseif defined GAME_L4D2
 	float m_flRadius;
 #endif
+
+	void Init(int inflictor, int attacker, float flDamage, int bitsDamageType, int iCustomDamage = 0)
+	{
+		this.m_hWeapon = -1;
+		this.m_hInflictor = inflictor;
+		if(attacker != -1) {
+			this.m_hAttacker = attacker;
+		} else {
+			this.m_hAttacker = inflictor;
+		}
+		this.m_bitsDamageType = bitsDamageType;
+		this.m_iDamageCustom = iCustomDamage;
+		this.m_flDamage = flDamage;
+		this.m_flBaseDamage = BASEDAMAGE_NOT_SPECIFIED;
+		this.m_iAmmoType = -1;
+		this.m_eCritType = CRIT_NONE;
+	}
 }
 
 #if defined GAME_TF2

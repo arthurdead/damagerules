@@ -213,7 +213,6 @@ class CBasePlayer;
 class CBaseCombatCharacter;
 
 int CBaseEntityOnTakeDamageOffset = -1;
-int CBaseEntityOnTakeDamage_AliveOffset = -1;
 void *CBasePlayerOnTakeDamagePtr = nullptr;
 int CBaseEntityEvent_KilledOtherOffset = -1;
 
@@ -298,6 +297,11 @@ public:
 	{
 		call_vfunc<void, CBaseEntity, CBaseEntity *, const CTakeDamageInfo &>(this, CBaseEntityEvent_KilledOtherOffset, pVictim, info);
 	}
+
+	int OnTakeDamage(const CTakeDamageInfo &info)
+	{
+		return call_vfunc<int, CBaseEntity, const CTakeDamageInfo &>(this, CBaseEntityOnTakeDamageOffset, info);
+	}
 };
 
 void SetEdictStateChanged(CBaseEntity *pEntity, int offset)
@@ -325,6 +329,7 @@ using HalloweenBossType = int;
 int CBaseCombatCharacterCheckTraceHullAttackRange = -1;
 int CBaseCombatCharacterCheckTraceHullAttackEndPoint = -1;
 void *CBaseCombatCharacterEvent_Killed = nullptr;
+int CBaseCombatCharacterOnTakeDamage_AliveOffset = -1;
 
 class CBaseCombatCharacter : public CBaseAnimating
 {
@@ -347,6 +352,11 @@ public:
 	void Event_Killed(const CTakeDamageInfo &info)
 	{
 		call_mfunc<void, CBaseCombatCharacter, const CTakeDamageInfo &>(this, CBaseCombatCharacterEvent_Killed, info);
+	}
+
+	int OnTakeDamage_Alive(const CTakeDamageInfo &info)
+	{
+		return call_vfunc<int, CBaseCombatCharacter, const CTakeDamageInfo &>(this, CBaseCombatCharacterOnTakeDamage_AliveOffset, info);
 	}
 };
 
@@ -801,38 +811,6 @@ SH_DECL_MANUALHOOK1(OnTakeDamage, 0, 0, 0, int, const CTakeDamageInfo &)
 SH_DECL_MANUALHOOK1(OnTakeDamageAlive, 0, 0, 0, int, const CTakeDamageInfo &)
 SH_DECL_MANUALHOOK1_void(Event_Killed, 0, 0, 0, const CTakeDamageInfo &)
 
-static cell_t CallOnTakeDamage(IPluginContext *pContext, const cell_t *params)
-{
-	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
-	if(!pEntity) {
-		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
-	}
-	
-	cell_t *addr = nullptr;
-	pContext->LocalToPhysAddr(params[2], &addr);
-	
-	CTakeDamageInfo info{};
-	::AddrToDamageInfo(info, addr);
-	
-	return SH_MCALL(pEntity, OnTakeDamage)(info);
-}
-
-static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *params)
-{
-	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
-	if(!pEntity) {
-		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
-	}
-	
-	cell_t *addr = nullptr;
-	pContext->LocalToPhysAddr(params[2], &addr);
-	
-	CTakeDamageInfo info{};
-	::AddrToDamageInfo(info, addr);
-	
-	return SH_MCALL(pEntity, OnTakeDamageAlive)(info);
-}
-
 cell_t CombatCharacterHullAttackRange(IPluginContext *pContext, const cell_t *params)
 {
 	CBaseCombatCharacter *pSubject = (CBaseCombatCharacter *)gamehelpers->ReferenceToEntity(params[1]);
@@ -885,30 +863,6 @@ cell_t CombatCharacterHullAttackEndPoint(IPluginContext *pContext, const cell_t 
 	return pHit ? gamehelpers->EntityToBCompatRef(pHit) : -1;
 }
 
-cell_t CombatCharacterEventKilled(IPluginContext *pContext, const cell_t *params)
-{
-	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
-	if(!pSubject)
-	{
-		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
-	}
-	
-	CBaseCombatCharacter *pCombat = pSubject->MyCombatCharacterPointer();
-	if(!pCombat)
-	{
-		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
-	}
-
-	cell_t *addr = nullptr;
-	pContext->LocalToPhysAddr(params[2], &addr);
-
-	CTakeDamageInfo info{};
-	::AddrToDamageInfo(info, addr);
-	pCombat->Event_Killed(info);
-
-	return 0;
-}
-
 enum entity_type
 {
 	entity_any,
@@ -943,6 +897,7 @@ struct callback_t
 struct callback_holder_t
 {
 	callback_t callbacks[NUM_CALLBACKS][2];
+	static inline bool inside_callback[NUM_CALLBACKS]{false};
 
 	callback_t &takedmg(bool post)
 	{ return callbacks[0][post ? 1 : 0]; }
@@ -980,7 +935,10 @@ struct callback_holder_t
 		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, SM_PARAM_COPYBACK);
 		fwd->PushCellByRef((cell_t *)&result);
 		cell_t res = 0;
+
+		inside_callback[0] = true;
 		fwd->Execute(&res);
+		inside_callback[0] = false;
 
 		if(res == Pl_Changed) {
 			::AddrToDamageInfo(info, addr);
@@ -1030,7 +988,10 @@ struct callback_holder_t
 		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
 		fwd->PushCellByRef((cell_t *)&result);
 		cell_t res = 0;
+
+		inside_callback[1] = true;
 		fwd->Execute(&res);
+		inside_callback[1] = false;
 
 		if(res == Pl_Changed) {
 			::AddrToDamageInfo(info, addr);
@@ -1079,7 +1040,10 @@ struct callback_holder_t
 		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
 		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
 		cell_t res = 0;
+
+		inside_callback[2] = true;
 		fwd->Execute(&res);
+		inside_callback[2] = false;
 
 		if(res == Pl_Changed) {
 			::AddrToDamageInfo(info, addr);
@@ -1162,6 +1126,67 @@ struct callback_holder_t
 		}
 	}
 };
+
+static cell_t CallOnTakeDamage(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+	
+	return (callback_holder_t::inside_callback[0] ? SH_MCALL(pEntity, OnTakeDamage)(info) : pEntity->OnTakeDamage(info));
+}
+
+static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseCombatCharacter *pEntity = (CBaseCombatCharacter *)gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+	
+	return (callback_holder_t::inside_callback[1] ? SH_MCALL(pEntity, OnTakeDamageAlive)(info) : pEntity->OnTakeDamage_Alive(info));
+}
+
+cell_t CombatCharacterEventKilled(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	CBaseCombatCharacter *pCombat = pSubject->MyCombatCharacterPointer();
+	if(!pCombat)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	if(callback_holder_t::inside_callback[2]) {
+		SH_MCALL(pCombat, Event_Killed)(info);
+	} else {
+		pCombat->Event_Killed(info);
+	}
+
+	return 0;
+}
 
 using callback_holder_map_t = std::unordered_map<int, callback_holder_t *>;
 callback_holder_map_t callbackmap{};
@@ -3305,8 +3330,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamageOffset, 0, 0);
 	
-	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseEntityOnTakeDamage_AliveOffset);
-	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseEntityOnTakeDamage_AliveOffset, 0, 0);
+	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseCombatCharacterOnTakeDamage_AliveOffset);
+	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseCombatCharacterOnTakeDamage_AliveOffset, 0, 0);
 	
 #if SOURCE_ENGINE == SE_TF2
 	g_pGameConf->GetMemSig("HandleRageGain", &HandleRageGainPtr);
