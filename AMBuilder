@@ -22,6 +22,8 @@ sourceFiles = [
 
 project = Extension.HL2Project(builder, projectName + '.ext')
 
+project.compiler.cxxincludes += [Extension.sm_root]
+
 nextbotpath = os.path.join(builder.currentSourcePath, '../nextbot')
 if not os.path.exists(nextbotpath):
 	if 'NEXTBOTSRC' in os.environ:

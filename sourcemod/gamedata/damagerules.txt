@@ -60,6 +60,16 @@
 				"library" "server"
 				"linux" "@_ZN12CTFGameStats22SW_GameStats_WriteKillEP9CTFPlayerS1_S1_P10IGameEventRK15CTakeDamageInfo"
 			}
+			"CBaseCombatCharacter::Event_Killed"
+			{
+				"library" "server"
+				"linux" "@_ZN20CBaseCombatCharacter12Event_KilledERK15CTakeDamageInfo"
+			}
+			"CTFGameRules::PushAllPlayersAway"
+			{
+				"library" "server"
+				"linux" "@_ZN12CTFGameRules18PushAllPlayersAwayERK6VectorffiP10CUtlVectorIP9CTFPlayer10CUtlMemoryIS5_iEE"
+			}
 		}
 		"Offsets"
 		{
@@ -154,6 +164,14 @@
 			"CBaseObject::Killed"
 			{
 				"linux" "353"
+			}
+			"CBaseCombatCharacter::CheckTraceHullAttack(float)"
+			{
+				"linux" "302"
+			}
+			"CBaseCombatCharacter::CheckTraceHullAttack(Vector)"
+			{
+				"linux" "303"
 			}
 		}
 	}

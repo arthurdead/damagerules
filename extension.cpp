@@ -322,12 +322,31 @@ int CBaseCombatCharacterGetBossType = -1;
 
 using HalloweenBossType = int;
 
+int CBaseCombatCharacterCheckTraceHullAttackRange = -1;
+int CBaseCombatCharacterCheckTraceHullAttackEndPoint = -1;
+void *CBaseCombatCharacterEvent_Killed = nullptr;
+
 class CBaseCombatCharacter : public CBaseAnimating
 {
 public:
 	HalloweenBossType GetBossType()
 	{
 		return call_vfunc<HalloweenBossType, CBaseCombatCharacter>(this, CBaseCombatCharacterGetBossType);
+	}
+
+	CBaseEntity *CheckTraceHullAttack( float flDist, const Vector &mins, const Vector &maxs, int iDamage, int iDmgType, float forceScale, bool bDamageAnyNPC )
+	{
+		return call_vfunc<CBaseEntity *, CBaseCombatCharacter, float, const Vector &, const Vector &, int, int, float, bool>(this, CBaseCombatCharacterCheckTraceHullAttackRange, flDist, mins, maxs, iDamage, iDmgType, forceScale, bDamageAnyNPC);
+	}
+
+	CBaseEntity *CheckTraceHullAttack( const Vector &vStart, const Vector &vEnd, const Vector &mins, const Vector &maxs, int iDamage, int iDmgType, float flForceScale, bool bDamageAnyNPC )
+	{
+		return call_vfunc<CBaseEntity *, CBaseCombatCharacter, const Vector &, const Vector &, const Vector &, const Vector &, int, int, float, bool>(this, CBaseCombatCharacterCheckTraceHullAttackEndPoint, vStart, vEnd, mins, maxs, iDamage, iDmgType, flForceScale, bDamageAnyNPC);
+	}
+
+	void Event_Killed(const CTakeDamageInfo &info)
+	{
+		call_mfunc<void, CBaseCombatCharacter, const CTakeDamageInfo &>(this, CBaseCombatCharacterEvent_Killed, info);
 	}
 };
 
@@ -476,6 +495,7 @@ public:
 
 #if SOURCE_ENGINE == SE_TF2
 int CTFGameRulesDeathNotice = -1;
+void *CTFGameRulesPushAllPlayersAway{nullptr};
 
 class CTFGameRules : public CMultiplayRules
 {
@@ -493,6 +513,11 @@ public:
 	void DeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info, const char *eventName)
 	{
 		call_vfunc<void, CTFGameRules, CBasePlayer *, const CTakeDamageInfo &, const char *>(this, CTFGameRulesDeathNotice, pVictim, info, eventName);
+	}
+
+	void PushAllPlayersAway( const Vector& vFromThisPoint, float flRange, float flForce, int nTeam, CUtlVector< CTFPlayer* > *pPushedPlayers /*= NULL*/ )
+	{
+		call_mfunc<void, CTFGameRules, const Vector&, float, float, int, CUtlVector< CTFPlayer* > *>(this, CTFGameRulesPushAllPlayersAway, vFromThisPoint, flRange, flForce, nTeam, pPushedPlayers);
 	}
 };
 
@@ -806,6 +831,82 @@ static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *para
 	::AddrToDamageInfo(info, addr);
 	
 	return SH_MCALL(pEntity, OnTakeDamageAlive)(info);
+}
+
+cell_t CombatCharacterHullAttackRange(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseCombatCharacter *pSubject = (CBaseCombatCharacter *)gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[3], &addr);
+
+	Vector mins{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[4], &addr);
+
+	Vector maxs{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CBaseEntity *pHit = pSubject->CheckTraceHullAttack(sp_ctof(params[2]), mins, maxs, params[5], params[6], sp_ctof(params[7]), params[8]);
+
+	return pHit ? gamehelpers->EntityToBCompatRef(pHit) : -1;
+}
+
+cell_t CombatCharacterHullAttackEndPoint(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseCombatCharacter *pSubject = (CBaseCombatCharacter *)gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+
+	Vector vStart{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[3], &addr);
+
+	Vector vEnd{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[4], &addr);
+
+	Vector mins{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[5], &addr);
+
+	Vector maxs{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CBaseEntity *pHit = pSubject->CheckTraceHullAttack(vStart, vEnd, mins, maxs, params[6], params[7], sp_ctof(params[8]), params[9]);
+
+	return pHit ? gamehelpers->EntityToBCompatRef(pHit) : -1;
+}
+
+cell_t CombatCharacterEventKilled(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	CBaseCombatCharacter *pCombat = pSubject->MyCombatCharacterPointer();
+	if(!pCombat)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+	pCombat->Event_Killed(info);
+
+	return 0;
 }
 
 enum entity_type
@@ -1320,26 +1421,277 @@ static cell_t HookEntityKilled(IPluginContext *pContext, const cell_t *params)
 	return 0;
 }
 
+class CAmmoDef
+#ifdef __HAS_WPNHACK
+	: public IAmmoDef
+#endif
+{
+#ifndef __HAS_WPNHACK
+	static int PlrDamage(int nAmmoIndex)
+	{
+		return 0;
+	}
+
+	static int NPCDamage(int nAmmoIndex)
+	{
+		return 0;
+	}
+
+	static int DamageType(int nAmmoIndex)
+	{
+		return 0;
+	}
+
+	static float DamageForce(int nAmmoIndex)
+	{
+		return 0.0f;
+	}
+
+	static int Index(const char *name)
+	{
+		return -1;
+	}
+#endif
+};
+
+CAmmoDef *GetAmmoDef()
+{
+#ifdef __HAS_WPNHACK
+	return (CAmmoDef *)g_pWpnHack->AmmoDef();
+#else
+	return nullptr;
+#endif
+}
+
+float ImpulseScale( float flTargetMass, float flDesiredSpeed )
+{
+	return (flTargetMass * flDesiredSpeed);
+}
+
+static ConVar *phys_pushscale{nullptr};
+
+void CalculateExplosiveDamageForce( CTakeDamageInfo *info, const Vector &vecDir, const Vector &vecForceOrigin, float flScale )
+{
+	info->SetDamagePosition( vecForceOrigin );
+
+	float flClampForce = ImpulseScale( 75, 400 );
+
+	// Calculate an impulse large enough to push a 75kg man 4 in/sec per point of damage
+	float flForceScale = info->GetBaseDamage() * ImpulseScale( 75, 4 );
+
+	if( flForceScale > flClampForce )
+		flForceScale = flClampForce;
+
+	// Fudge blast forces a little bit, so that each
+	// victim gets a slightly different trajectory. 
+	// This simulates features that usually vary from
+	// person-to-person variables such as bodyweight,
+	// which are all indentical for characters using the same model.
+	flForceScale *= random->RandomFloat( 0.85, 1.15 );
+
+	// Calculate the vector and stuff it into the takedamageinfo
+	Vector vecForce = vecDir;
+	VectorNormalize( vecForce );
+	vecForce *= flForceScale;
+	vecForce *= phys_pushscale->GetFloat();
+	vecForce *= flScale;
+	info->SetDamageForce( vecForce );
+}
+
+void CalculateBulletDamageForce( CTakeDamageInfo *info, int iBulletType, const Vector &vecBulletDir, const Vector &vecForceOrigin, float flScale )
+{
+	info->SetDamagePosition( vecForceOrigin );
+	Vector vecForce = vecBulletDir;
+	VectorNormalize( vecForce );
+	vecForce *= GetAmmoDef()->DamageForce( iBulletType );
+	vecForce *= phys_pushscale->GetFloat();
+	vecForce *= flScale;
+	info->SetDamageForce( vecForce );
+}
+
+void CalculateMeleeDamageForce( CTakeDamageInfo *info, const Vector &vecMeleeDir, const Vector &vecForceOrigin, float flScale )
+{
+	info->SetDamagePosition( vecForceOrigin );
+
+	// Calculate an impulse large enough to push a 75kg man 4 in/sec per point of damage
+	float flForceScale = info->GetBaseDamage() * ImpulseScale( 75, 4 );
+	Vector vecForce = vecMeleeDir;
+	VectorNormalize( vecForce );
+	vecForce *= flForceScale;
+	vecForce *= phys_pushscale->GetFloat();
+	vecForce *= flScale;
+	info->SetDamageForce( vecForce );
+}
+
+void GuessDamageForce( CTakeDamageInfo *info, const Vector &vecForceDir, const Vector &vecForceOrigin, float flScale )
+{
+	if ( info->GetDamageType() & DMG_BULLET )
+	{
+		CalculateBulletDamageForce( info, GetAmmoDef()->Index("TF_AMMO_PRIMARY"), vecForceDir, vecForceOrigin, flScale );
+	}
+	else if ( info->GetDamageType() & DMG_BLAST )
+	{
+		CalculateExplosiveDamageForce( info, vecForceDir, vecForceOrigin, flScale );
+	}
+	else
+	{
+		CalculateMeleeDamageForce( info, vecForceDir, vecForceOrigin, flScale );
+	}
+}
+
+static cell_t CalculateExplosiveDamageForceNative(IPluginContext *pContext, const cell_t *params)
+{
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[1], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	pContext->LocalToPhysAddr(params[2], &addr);
+	Vector vecDir{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[3], &addr);
+	Vector vecForceOrigin{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CalculateExplosiveDamageForce(&info, vecDir, vecForceOrigin, sp_ctof(params[4]));
+
+	pContext->LocalToPhysAddr(params[1], &addr);
+	::DamageInfoToAddr(info, addr);
+
+	return 0;
+}
+
+static cell_t CalculateBulletDamageForceNative(IPluginContext *pContext, const cell_t *params)
+{
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[1], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	pContext->LocalToPhysAddr(params[3], &addr);
+	Vector vecDir{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[4], &addr);
+	Vector vecForceOrigin{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CalculateBulletDamageForce(&info, params[2], vecDir, vecForceOrigin, sp_ctof(params[5]));
+
+	pContext->LocalToPhysAddr(params[1], &addr);
+	::DamageInfoToAddr(info, addr);
+
+	return 0;
+}
+
+static cell_t CalculateMeleeDamageForceNative(IPluginContext *pContext, const cell_t *params)
+{
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[1], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	pContext->LocalToPhysAddr(params[2], &addr);
+	Vector vecDir{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[3], &addr);
+	Vector vecForceOrigin{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CalculateMeleeDamageForce(&info, vecDir, vecForceOrigin, sp_ctof(params[4]));
+
+	pContext->LocalToPhysAddr(params[1], &addr);
+	::DamageInfoToAddr(info, addr);
+
+	return 0;
+}
+
+static cell_t GuessDamageForceNative(IPluginContext *pContext, const cell_t *params)
+{
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[1], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	pContext->LocalToPhysAddr(params[2], &addr);
+	Vector vecDir{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	pContext->LocalToPhysAddr(params[3], &addr);
+	Vector vecForceOrigin{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	GuessDamageForce(&info, vecDir, vecForceOrigin, sp_ctof(params[4]));
+
+	pContext->LocalToPhysAddr(params[1], &addr);
+	::DamageInfoToAddr(info, addr);
+
+	return 0;
+}
+
+#include "funnyfile.h"
+
+static cell_t PushAllPlayersAway(IPluginContext *pContext, const cell_t *params)
+{
+	HandleSecurity security(pContext->GetIdentity(), myself->GetIdentity());
+	
+	ICellArray *obj = nullptr;
+	if(params[5] != BAD_HANDLE) {
+		HandleError err = ((HandleSystemHack *)handlesys)->ReadCoreHandle(params[5], arraylist_handle, &security, (void **)&obj);
+		if(err != HandleError_None)
+		{
+			return pContext->ThrowNativeError("Invalid Handle %x (error: %d)", params[5], err);
+		}
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[1], &addr);
+	Vector vFromThisPoint{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	CUtlVector<CTFPlayer *> PushedPlayers{};
+	((CTFGameRules *)g_pGameRules)->PushAllPlayersAway(vFromThisPoint, sp_ctof(params[2]), sp_ctof(params[3]), params[4], &PushedPlayers);
+
+	if(obj) {
+		size_t len{PushedPlayers.Count()};
+		obj->resize(len);
+		for(size_t i{0}; i < len; ++i) {
+			*obj->at(i) = gamehelpers->EntityToBCompatRef(PushedPlayers[i]);
+		}
+	}
+
+	return 0;
+}
+
 static const sp_nativeinfo_t g_sNativesInfo[] =
 {
 #if SOURCE_ENGINE == SE_TF2
 	{"HandleRageGain", HandleRageGainNative},
-	{"CallOnDealtDamage", CallOnDealtDamage},
+	{"PlayerOnDealtDamage", CallOnDealtDamage},
 	{"ApplyOnDamageModifyRules", ApplyOnDamageModifyRules},
 	{"ApplyOnDamageAliveModifyRules", ApplyOnDamageAliveModifyRules},
 	{"ApplyOnHitAttributes", ApplyOnHitAttributes},
 #endif
-	{"CallOnTakeDamage", CallOnTakeDamage},
-	{"CallOnTakeDamageAlive", CallOnTakeDamageAlive},
+	{"EntityOnTakeDamage", CallOnTakeDamage},
+	{"EntityOnTakeDamageAlive", CallOnTakeDamageAlive},
 	{"HookEntityOnTakeDamage", SetEntityOnTakeDamage},
 	{"HookEntityOnTakeDamageAlive", SetEntityOnTakeDamageAlive},
 	{"HookEntityKilled", HookEntityKilled},
-	{"TakeDamage", TakeDamage},
+	{"EntityTakeDamage", TakeDamage},
+	{"CombatCharacterHullAttackRange", CombatCharacterHullAttackRange},
+	{"CombatCharacterHullAttackEndPoint", CombatCharacterHullAttackEndPoint},
+	{"CombatCharacterEventKilled", CombatCharacterEventKilled},
+	{"CalculateExplosiveDamageForce", CalculateExplosiveDamageForceNative},
+	{"CalculateBulletDamageForce", CalculateBulletDamageForceNative},
+	{"CalculateMeleeDamageForce", CalculateMeleeDamageForceNative},
+	{"GuessDamageForce", GuessDamageForceNative},
+	{"PushAllPlayersAway", PushAllPlayersAway},
 	{nullptr, nullptr},
 };
 
 void Sample::OnEntityDestroyed(CBaseEntity *pEntity)
 {
+	if(!pEntity) {
+		return;
+	}
+
 	
 }
 
@@ -1487,38 +1839,6 @@ ConVar	sk_dmg_inflict_scale3( "sk_dmg_inflict_scale3", "0.75", FCVAR_REPLICATED 
 ConVar	sk_dmg_take_scale1( "sk_dmg_take_scale1", "0.50", FCVAR_REPLICATED );
 ConVar	sk_dmg_take_scale2( "sk_dmg_take_scale2", "1.00", FCVAR_REPLICATED );
 ConVar	sk_dmg_take_scale3( "sk_dmg_take_scale3", "2.0", FCVAR_REPLICATED );
-
-class CAmmoDef
-#ifdef __HAS_WPNHACK
-	: public IAmmoDef
-#endif
-{
-#ifndef __HAS_WPNHACK
-	static int PlrDamage(int nAmmoIndex)
-	{
-		return 0;
-	}
-
-	static int NPCDamage(int nAmmoIndex)
-	{
-		return 0;
-	}
-
-	static int DamageType(int nAmmoIndex)
-	{
-		return 0;
-	}
-#endif
-};
-
-CAmmoDef *GetAmmoDef()
-{
-#ifdef __HAS_WPNHACK
-	return (CAmmoDef *)g_pWpnHack->AmmoDef();
-#else
-	return nullptr;
-#endif
-}
 
 static void *player_block{nullptr};
 
@@ -2904,6 +3224,8 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 
 SH_DECL_HOOK2(IGameEventManager2, FireEvent, SH_NOATTRIB, 0, bool, IGameEvent *, bool)
 
+IUniformRandomStream *random{nullptr};
+
 bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool late)
 {
 	gpGlobals = ismm->GetCGlobals();
@@ -2912,10 +3234,13 @@ bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool l
 	GET_V_IFACE_CURRENT(GetEngineFactory, gameeventmanager, IGameEventManager2, INTERFACEVERSION_GAMEEVENTSMANAGER2);
 	GET_V_IFACE_CURRENT(GetServerFactory, servertools, IServerTools, VSERVERTOOLS_INTERFACE_VERSION);
 	GET_V_IFACE_ANY(GetEngineFactory, netstringtables, INetworkStringTableContainer, INTERFACENAME_NETWORKSTRINGTABLESERVER)
+	GET_V_IFACE_ANY(GetEngineFactory, random, IUniformRandomStream, VENGINE_SERVER_RANDOM_INTERFACE_VERSION)
 	g_pCVar = cvar;
 	ConVar_Register(0, this);
 
 	tf_flamethrower_boxsize = g_pCVar->FindVar("tf_flamethrower_boxsize");
+
+	phys_pushscale = g_pCVar->FindVar("phys_pushscale");
 
 	SH_ADD_HOOK(IVEngineServer, GetPlayerUserId, engine, SH_STATIC(hook_getuserid), false);
 	SH_ADD_HOOK(IVEngineServer, GetClientSteamID, engine, SH_STATIC(hook_getsteamid), false);
@@ -2988,6 +3313,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetMemSig("CTFPlayer::OnDealtDamage", &CTFPlayerOnDealtDamage);
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageModifyRules", &CTFGameRulesApplyOnDamageModifyRules);
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
+	g_pGameConf->GetMemSig("CTFGameRules::PushAllPlayersAway", &CTFGameRulesPushAllPlayersAway);
 #endif
 	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
 
@@ -2998,9 +3324,16 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
 #endif
 
+	g_pGameConf->GetOffset("CBaseEntity::MyCombatCharacterPointer", &CBaseEntityMyCombatCharacterPointer);
+
 	int offset = -1;
 	g_pGameConf->GetOffset("CBaseCombatCharacter::Event_Killed", &offset);
 	SH_MANUALHOOK_RECONFIGURE(Event_Killed, offset, 0, 0);
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(float)", &CBaseCombatCharacterCheckTraceHullAttackRange);
+	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(Vector)", &CBaseCombatCharacterCheckTraceHullAttackEndPoint);
+
+	g_pGameConf->GetMemSig("CBaseCombatCharacter::Event_Killed", &CBaseCombatCharacterEvent_Killed);
 
 	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
 	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
@@ -3053,6 +3386,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 #endif
 	
 	sharesys->RegisterLibrary(myself, "damagerules");
+
+	HandleSystemHack::init();
 
 	return true;
 }

@@ -8,6 +8,7 @@
 #endif
 
 #include <sdkhooks>
+#tryinclude <wpnhack>
 
 #if defined GAME_TF2
 #include <tf2_stocks>
@@ -82,64 +83,32 @@ public DamageModifyExtras_t NULL_DAMAGE_MODIFY_EXTRA;
 
 native void HandleRageGain(int client, int iRequiredBuffFlags, float flDamage, float fInverseRageGainScale);
 
-native void CallOnDealtDamage(int client, int entity, const CTakeDamageInfoVar info);
+native void PlayerOnDealtDamage(int client, int entity, const CTakeDamageInfoVar info);
 native bool ApplyOnDamageModifyRules(CTakeDamageInfoVar info, int entity, bool bAllowDamage);
 native float ApplyOnDamageAliveModifyRules(const CTakeDamageInfoVar info, int entity, DamageModifyExtras_tVar extras);
 native void ApplyOnHitAttributes(int weapon, int victim, int attacker, const CTakeDamageInfoVar info);
 #endif
 
-native int TakeDamage(int entity, const CTakeDamageInfoVar info);
+native int EntityTakeDamage(int entity, const CTakeDamageInfoVar info);
 
-native int CallOnTakeDamage(int entity, const CTakeDamageInfoVar info);
-native int CallOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
-//native void CallKilled(int entity, const CTakeDamageInfoVar info);
+native int EntityOnTakeDamage(int entity, const CTakeDamageInfoVar info);
+native int EntityOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
+
+native void CombatCharacterEventKilled(int entity, const CTakeDamageInfoVar info);
+
+native int CombatCharacterHullAttackRange(int entity, float flDist, const float mins[3], const float maxs[3], int iDamage, int iDmgType, float forceScale = 1.0, bool bDamageAnyNPC = false);
+native int CombatCharacterHullAttackEndPoint(int entity, const float vStart[3], const float vEnd[3], const float mins[3], const float maxs[3], int iDamage, int iDmgType, float flForceScale = 1.0, bool bDamageAnyNPC = false);
 
 native void HookEntityOnTakeDamage(int entity, ondamage_func_t func, bool post);
 native void HookEntityOnTakeDamageAlive(int entity, ondamage_func_t func, bool post);
 native void HookEntityKilled(int entity, killed_func_t func, bool post);
 
-stock Action baseline_ontakedamage(int entity, CTakeDamageInfo info, int &result)
-{
-#if defined GAME_TF2
-	ApplyOnDamageModifyRules(info, entity, true);
-	
-	int attacker = info.m_hAttacker;
-	float damage = info.m_flDamage;
-	if(damage > 0.0 && attacker != entity) {
-		HandleRageGain(attacker, kRageBuffFlag_OnDamageDealt, damage, 6.0);
+native void PushAllPlayersAway(const float vFromThisPoint[3], float flRange, float flForce, int nTeam, ArrayList PushedPlayers = null);
 
-		if((info.m_bitsDamageType & DMG_BURN) || (info.m_bitsDamageType & DMG_PLASMA)) {
-			HandleRageGain(attacker, kRageBuffFlag_OnBurnDamageDealt, damage, 30.0);
-		}
-
-		int weapon = info.m_hWeapon;
-		if(weapon != -1) {
-			ApplyOnHitAttributes(weapon, entity, attacker, info);
-		}
-	}
-#endif
-
-	result = CallOnTakeDamage(entity, info);
-	return Plugin_Changed;
-}
-
-stock Action baseline_ontakedamagealive(int entity, CTakeDamageInfo info, int &result)
-{
-#if defined GAME_TF2
-	info.m_flDamage = ApplyOnDamageAliveModifyRules(info, entity, NULL_DAMAGE_MODIFY_EXTRA);
-#endif
-
-	result = CallOnTakeDamageAlive(entity, info);
-
-#if defined GAME_TF2
-	int attacker = info.m_hAttacker;
-	if(attacker != -1) {
-		CallOnDealtDamage(attacker, entity, info);
-	}
-#endif
-
-	return Plugin_Changed;
-}
+native void CalculateExplosiveDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
+native void CalculateBulletDamageForce(CTakeDamageInfoVar info, int iBulletType, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
+native void CalculateMeleeDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
+native void GuessDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
 
 #if !defined REQUIRE_EXTENSIONS
 public void __ext_damagerules_SetNTVOptional()
