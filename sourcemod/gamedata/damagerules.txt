@@ -15,6 +15,16 @@
 				"library" "server"
 				"linux" "@_ZN11CBaseEntity10TakeDamageERK15CTakeDamageInfo"
 			}
+			"CBaseEntity::ApplyAbsVelocityImpulse"
+			{
+				"library" "server"
+				"linux" "@_ZN11CBaseEntity23ApplyAbsVelocityImpulseERK6Vector"
+			}
+			"CBaseCombatCharacter::Event_Killed"
+			{
+				"library" "server"
+				"linux" "@_ZN20CBaseCombatCharacter12Event_KilledERK15CTakeDamageInfo"
+			}
 		}
 	}
 	"left4dead2"
@@ -60,15 +70,15 @@
 				"library" "server"
 				"linux" "@_ZN12CTFGameStats22SW_GameStats_WriteKillEP9CTFPlayerS1_S1_P10IGameEventRK15CTakeDamageInfo"
 			}
-			"CBaseCombatCharacter::Event_Killed"
-			{
-				"library" "server"
-				"linux" "@_ZN20CBaseCombatCharacter12Event_KilledERK15CTakeDamageInfo"
-			}
 			"CTFGameRules::PushAllPlayersAway"
 			{
 				"library" "server"
 				"linux" "@_ZN12CTFGameRules18PushAllPlayersAwayERK6VectorffiP10CUtlVectorIP9CTFPlayer10CUtlMemoryIS5_iEE"
+			}
+			"CTFPlayer::ApplyAbsVelocityImpulse"
+			{
+				"library" "server"
+				"linux" "@_ZN9CTFPlayer23ApplyAbsVelocityImpulseERK6Vector"
 			}
 		}
 		"Offsets"

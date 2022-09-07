@@ -124,6 +124,9 @@ native void HookEntityKilled(int entity, killed_func_t func, bool post);
 
 native void PushAllPlayersAway(const float vFromThisPoint[3], float flRange, float flForce, int nTeam, ArrayList PushedPlayers = null);
 
+//TODO!!! move this somewhere else idk where
+native void ApplyAbsVelocityImpulse(int entity, const float vecImpulse[3]);
+
 native void CalculateExplosiveDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
 native void CalculateBulletDamageForce(CTakeDamageInfoVar info, int iBulletType, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);
 native void CalculateMeleeDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);

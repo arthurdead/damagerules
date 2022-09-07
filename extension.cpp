@@ -221,6 +221,8 @@ int m_iHealthOffset = -1;
 int m_hActiveWeaponOffset = -1;
 int m_iNameOffset = -1;
 
+void *CBaseEntityApplyAbsVelocityImpulse{nullptr};
+
 class CBaseEntity : public IServerEntity
 {
 public:
@@ -301,6 +303,11 @@ public:
 	int OnTakeDamage(const CTakeDamageInfo &info)
 	{
 		return call_vfunc<int, CBaseEntity, const CTakeDamageInfo &>(this, CBaseEntityOnTakeDamageOffset, info);
+	}
+
+	void ApplyAbsVelocityImpulse(const Vector &vecImpulse)
+	{
+		call_mfunc<void, CBaseEntity, const Vector &>(this, CBaseEntityApplyAbsVelocityImpulse, vecImpulse);
 	}
 };
 
@@ -404,6 +411,8 @@ public:
 	}
 };
 
+void *CTFPlayerApplyAbsVelocityImpulse{nullptr};
+
 class CTFPlayer : public CBasePlayer
 {
 public:
@@ -422,6 +431,11 @@ public:
 		}
 
 		return (CTFWeaponBase *)(CBaseEntity *)*(EHANDLE *)(((unsigned char *)this) + m_hActiveWeaponOffset);
+	}
+
+	void ApplyAbsVelocityImpulse(const Vector &vecImpulse)
+	{
+		call_mfunc<void, CTFPlayer, const Vector &>(this, CTFPlayerApplyAbsVelocityImpulse, vecImpulse);
 	}
 };
 
@@ -1652,6 +1666,26 @@ static cell_t GuessDamageForceNative(IPluginContext *pContext, const cell_t *par
 	return 0;
 }
 
+static cell_t ApplyAbsVelocityImpulse(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pEntity) {
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	Vector vecImpulse{sp_ctof(addr[0]), sp_ctof(addr[1]), sp_ctof(addr[2])};
+
+	if(pEntity->IsPlayer()) {
+		((CTFPlayer *)pEntity)->ApplyAbsVelocityImpulse(vecImpulse);
+	} else {
+		pEntity->ApplyAbsVelocityImpulse(vecImpulse);
+	}
+
+	return 0;
+}
+
 #include "funnyfile.h"
 
 static cell_t PushAllPlayersAway(IPluginContext *pContext, const cell_t *params)
@@ -1708,6 +1742,7 @@ static const sp_nativeinfo_t g_sNativesInfo[] =
 	{"CalculateMeleeDamageForce", CalculateMeleeDamageForceNative},
 	{"GuessDamageForce", GuessDamageForceNative},
 	{"PushAllPlayersAway", PushAllPlayersAway},
+	{"ApplyAbsVelocityImpulse", ApplyAbsVelocityImpulse},
 	{nullptr, nullptr},
 };
 
@@ -3339,7 +3374,11 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageModifyRules", &CTFGameRulesApplyOnDamageModifyRules);
 	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
 	g_pGameConf->GetMemSig("CTFGameRules::PushAllPlayersAway", &CTFGameRulesPushAllPlayersAway);
+	g_pGameConf->GetMemSig("CTFPlayer::ApplyAbsVelocityImpulse", &CTFPlayerApplyAbsVelocityImpulse);
 #endif
+
+	g_pGameConf->GetMemSig("CBaseEntity::ApplyAbsVelocityImpulse", &CBaseEntityApplyAbsVelocityImpulse);
+
 	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
 
 	g_pGameConf->GetOffset("CBaseAnimating::Ignite", &CBaseAnimatingIgnite);
