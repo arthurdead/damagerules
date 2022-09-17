@@ -226,6 +226,10 @@ void *CBaseEntityApplyAbsVelocityImpulse{nullptr};
 class CBaseEntity : public IServerEntity
 {
 public:
+	DECLARE_CLASS_NOBASE( CBaseEntity );
+	DECLARE_SERVERCLASS();
+	DECLARE_DATADESC();
+
 	int entindex()
 	{
 		return gamehelpers->EntityToBCompatRef(this);
@@ -2010,7 +2014,13 @@ int CBaseEntityClassify = -1;
 int CBasePlayerIsBot = -1;
 void *CBaseEntityEvent_KilledOtherPtr = nullptr;
 int CBaseEntityGetNetworkableOffset = -1;
+int CBaseEntitySetRefEHandleOffset = -1;
+int CBaseEntityGetRefEHandleOffset = -1;
+int CBaseEntityGetBaseEntityOffset = -1;
 void *CBaseEntityGetNetworkable = nullptr;
+void *CBaseEntitySetRefEHandle = nullptr;
+void *CBaseEntityGetRefEHandle = nullptr;
+void *CBaseEntityGetBaseEntity = nullptr;
 
 CBaseEntity *npc_ent{nullptr};
 
@@ -2211,9 +2221,16 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 			CBaseEntityGetNetworkable = base_vtabl[CBaseEntityGetNetworkableOffset];
 			CBaseEntityEvent_KilledOtherPtr = base_vtabl[CBaseEntityEvent_KilledOtherOffset];
 
+			CBaseEntitySetRefEHandle = base_vtabl[CBaseEntitySetRefEHandleOffset];
+			CBaseEntityGetRefEHandle = base_vtabl[CBaseEntityGetRefEHandleOffset];
+			CBaseEntityGetBaseEntity = base_vtabl[CBaseEntityGetBaseEntityOffset];
+
 			player_block_vtable = new void *[CBasePlayerIsBot];
 
 			player_block_vtable[CBaseEntityGetNetworkableOffset] = CBaseEntityGetNetworkable;
+			player_block_vtable[CBaseEntitySetRefEHandleOffset] = CBaseEntitySetRefEHandle;
+			player_block_vtable[CBaseEntityGetRefEHandleOffset] = CBaseEntityGetRefEHandle;
+			player_block_vtable[CBaseEntityGetBaseEntityOffset] = CBaseEntityGetBaseEntity;
 			player_block_vtable[CBaseEntityIsPlayer] = func_to_void(&PlayerBlockVTable::IsPlayer);
 			player_block_vtable[CBaseEntityClassify] = func_to_void(&PlayerBlockVTable::Classify);
 			player_block_vtable[CBasePlayerIsBot] = func_to_void(&PlayerBlockVTable::IsBot);
@@ -2223,6 +2240,12 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 		if(!player_block) {
 			player_block = engine->PvAllocEntPrivateData(player_size);
 			*(void ***)player_block = player_block_vtable;
+
+			CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
+
+			void **network_vtabl = *(void ***)g_pGameRulesProxyEntity->GetNetworkable();
+
+			*(void ***)m_Network = network_vtabl;
 		}
 	}
 
@@ -2995,6 +3018,15 @@ void game_frame(bool simulating)
 ConVar npc_deathnotice_eventtime( "npc_deathnotice_eventtime", "0.3" );
 ConVar npc_deathnotice_connecttime( "npc_deathnotice_connecttime", "0.1" );
 
+void CServerNetworkProperty::Init( CBaseEntity *pEntity )
+{
+	m_pPev = pEntity ? pEntity->edict() : nullptr;
+	m_pOuter = pEntity;
+	m_pServerClass = pEntity ? pEntity->GetServerClass() : nullptr;
+	m_bPendingStateChange = false;
+	m_PVSInfo.m_nClusterCount = 0;
+}
+
 static void setup_playerblock_vars(CBaseEntity *pEntity)
 {
 	const char *name{pEntity->GetName()};
@@ -3030,18 +3062,20 @@ static void setup_playerblock_vars(CBaseEntity *pEntity)
 	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
 
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(team);
+	((CBaseEntity *)player_block)->SetRefEHandle(pEntity->GetRefEHandle());
 	npc_ent = pEntity;
 	npc_edict = pEntity->edict();
-	m_Network->SetEdict(npc_edict);
+	m_Network->Init(pEntity);
 }
 
 static void clear_playerblock_vars()
 {
 	CServerNetworkProperty *m_Network = (CServerNetworkProperty *)((CBaseEntity *)player_block)->GetNetworkable();
 
-	m_Network->SetEdict(nullptr);
+	m_Network->Init(nullptr);
 	npc_edict = nullptr;
 	npc_ent = nullptr;
+	((CBaseEntity *)player_block)->SetRefEHandle(CBaseHandle{INVALID_EHANDLE_INDEX});
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 }
 
@@ -3274,7 +3308,7 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 		}
 
 		npc_type ntype{g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname())};
-		if(ntype == npc_custom) {
+		if(ntype & npc_any) {
 			return;
 		}
 	}
@@ -3405,6 +3439,9 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseEntity::Event_KilledOther", &CBaseEntityEvent_KilledOtherOffset);
 
 	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
+	CBaseEntitySetRefEHandleOffset = vfunc_index(&CBaseEntity::SetRefEHandle);
+	CBaseEntityGetRefEHandleOffset = vfunc_index(&CBaseEntity::GetRefEHandle);
+	CBaseEntityGetBaseEntityOffset = vfunc_index(&CBaseEntity::GetBaseEntity);
 
 	sm_sendprop_info_t info{};
 	gamehelpers->FindSendPropInfo("CBaseEntity", "m_iTeamNum", &info);
