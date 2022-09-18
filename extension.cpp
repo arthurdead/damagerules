@@ -515,9 +515,9 @@ public:
 		call_mfunc<void, CMultiplayRules, CBasePlayer *, const CTakeDamageInfo &>(this, CMultiplayRulesDeathNoticePtr, pVictim, info);
 	}
 
-	CBasePlayer *GetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
+	CBasePlayer *GetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor, CBaseEntity *pVictim )
 	{
-		return call_mfunc<CBasePlayer *, CMultiplayRules, CBaseEntity *, CBaseEntity *>(this, CMultiplayRulesGetDeathScorerPtr, pKiller, pInflictor);
+		return call_mfunc<CBasePlayer *, CMultiplayRules, CBaseEntity *, CBaseEntity *, CBaseEntity *>(this, CMultiplayRulesGetDeathScorerPtr, pKiller, pInflictor, pVictim);
 	}
 };
 
@@ -1992,7 +1992,7 @@ public:
 		return flDamage;
 	}
 
-	CBasePlayer *DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor );
+	CBasePlayer *DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor, CBaseEntity *pVictim );
 
 	void DetourDeathNotice(CBasePlayer *pVictim, const CTakeDamageInfo &info);
 };
@@ -3079,9 +3079,9 @@ static void clear_playerblock_vars()
 	((CBaseEntity *)player_block)->SetTeamNumber_nonetwork(0);
 }
 
-CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor )
+CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CBaseEntity *pInflictor, CBaseEntity *pVictim )
 {
-	CBasePlayer *pPlayer{CTFGameRules::GetDeathScorer(pKiller, pInflictor)};
+	CBasePlayer *pPlayer{CTFGameRules::GetDeathScorer(pKiller, pInflictor, pVictim)};
 	if(pPlayer) {
 		return pPlayer;
 	}
