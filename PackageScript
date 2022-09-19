@@ -38,6 +38,10 @@ CopyFiles('sourcemod/gamedata', 'addons/sourcemod/gamedata',
   [ 'damagerules.txt', ]
 )
 
+CopyFiles('sourcemod/extensions', 'addons/sourcemod/extensions',
+  [ 'damagerules.autoload']
+)
+
 # Config Files
 #CopyFiles('configs', 'addons/sourcemod/configs',
 #  [ 'configfile.cfg',
