@@ -2683,7 +2683,7 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 		}
 	}
 
-	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->GetPlayer();
 	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
 
 	// On damage Rage
@@ -2787,7 +2787,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 		info.SetDamage( info.GetDamage() * GetCritInjuryMultiplier() );
 	}
 
-	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->GetPlayer();
 	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
 
 #if SOURCE_ENGINE == SE_TF2
@@ -2873,7 +2873,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 #if SOURCE_ENGINE == SE_TF2
 	// Let attacker react to the damage they dealt
-	CTFPlayer *pAttacker = (CTFPlayer *)rawInfo.GetAttacker()->IsPlayer();
+	CTFPlayer *pAttacker = (CTFPlayer *)rawInfo.GetAttacker()->GetPlayer();
 	if ( pAttacker )
 	{
 		pAttacker->OnDealtDamage( (CBaseCombatCharacter *)pThis, info );
@@ -3170,7 +3170,7 @@ void hook_npc_killed(const CTakeDamageInfo &info)
 
 	CTakeDamageInfo info_copy = info;
 
-	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->IsPlayer();
+	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->GetPlayer();
 	CTFWeaponBase *attackerWeapon = attackerPlayer ? attackerPlayer->GetActiveTFWeapon() : nullptr;
 
 	const char *eventName{nullptr};
