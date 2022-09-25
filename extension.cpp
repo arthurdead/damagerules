@@ -2212,7 +2212,7 @@ void Sample::OnCoreMapStart(edict_t * pEdictList, int edictCount, int clientMax)
 	}
 
 	if(!pObjectKilledDetour) {
-		CBaseEntity *pEntity = dictionary->FindFactory("obj_dispenser")->Create("obj_dispenser")->GetBaseEntity();
+		CBaseEntity *pEntity = dictionary->FindFactory("obj_dispenser")->Create("__hack_get_obj_vtable__")->GetBaseEntity();
 
 		void **vtabl = *(void ***)pEntity;
 
