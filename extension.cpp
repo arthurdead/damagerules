@@ -181,6 +181,7 @@ struct DamageModifyExtras_t
 };
 
 #define DMG_CRITICAL (DMG_ACID)
+#define DMG_IGNITE (DMG_PLASMA)
 #endif
 
 void SetHandleEntity(CBaseHandle &hndl, edict_t *pEdict)
@@ -2661,6 +2662,12 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 
 	CTakeDamageInfo info = rawInfo;
 
+	//TODO!!!!!!!! check for "ragdolls become ash" attribute on attackerWeapon
+	if(info.GetDamageCustom() == TF_DMG_CUSTOM_PLASMA || 
+		info.GetDamageCustom() == TF_DMG_CUSTOM_PLASMA_CHARGED) {
+		info.AddDamageType(DMG_DISSOLVE);
+	}
+
 	bool override_result = false;
 	int result_override = 0;
 
@@ -2695,7 +2702,7 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 		HandleRageGain( attackerPlayer, kRageBuffFlag_OnDamageDealt, info.GetDamage(), 6.0f );
 
 		// Buff 5: our pyro attacker get rage when we're damaged by fire
-		if ( ( info.GetDamageType() & DMG_BURN ) != 0 || ( info.GetDamageType() & DMG_PLASMA ) != 0 )
+		if ( ( info.GetDamageType() & DMG_BURN ) != 0 || ( info.GetDamageType() & DMG_IGNITE ) != 0 )
 		{
 			HandleRageGain( attackerPlayer, kRageBuffFlag_OnBurnDamageDealt, info.GetDamage(), 30.f );
 		}
@@ -2708,6 +2715,25 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 				pWeapon->ApplyOnHitAttributes( pThis, attackerPlayer, info );
 			}
 		}
+	}
+#endif
+
+#if SOURCE_ENGINE == SE_TF2
+	if(( info.GetDamageType() & DMG_BURN ) != 0 || ( info.GetDamageType() & DMG_IGNITE ) != 0) {
+		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
+
+		if(attackerWeapon) {
+			switch(attackerWeapon->GetWeaponID()) {
+				case TF_WEAPON_FLAREGUN:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE;
+				break;
+				case TF_WEAPON_PARTICLE_CANNON:
+				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA;
+				break;
+			}
+		}
+
+		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
 	}
 #endif
 
@@ -2726,23 +2752,6 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 	if(override_result) {
 		result = result_override;
 	}
-
-#if SOURCE_ENGINE == SE_TF2
-	if(info.GetDamageType() & DMG_BURN) {
-		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
-
-		if(attackerWeapon) {
-			switch(attackerWeapon->GetWeaponID()) {
-				case TF_WEAPON_FLAREGUN:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
-				case TF_WEAPON_PARTICLE_CANNON:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
-			}
-		}
-
-		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
-	}
-#endif
 
 	RETURN_META_VALUE(MRES_SUPERCEDE, result);
 }
@@ -2853,23 +2862,6 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 
 		gameeventmanager->FireEvent( event );
 	}
-
-#if SOURCE_ENGINE == SE_TF2
-	if(outParams.bIgniting || (info.GetDamageType() & DMG_BURN)) {
-		float flFlameLifetime = TF_BURNING_FLAME_LIFE;
-
-		if(attackerWeapon) {
-			switch(attackerWeapon->GetWeaponID()) {
-				case TF_WEAPON_FLAREGUN:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_FLARE; break;
-				case TF_WEAPON_PARTICLE_CANNON:
-				flFlameLifetime = TF_BURNING_FLAME_LIFE_PLASMA; break;
-			}
-		}
-
-		((NextBotCombatCharacter *)pThis)->Ignite(flFlameLifetime, info.GetAttacker());
-	}
-#endif
 
 #if SOURCE_ENGINE == SE_TF2
 	// Let attacker react to the damage they dealt
