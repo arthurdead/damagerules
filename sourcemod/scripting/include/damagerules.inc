@@ -8,7 +8,17 @@
 #endif
 
 #include <sdkhooks>
+
+#if defined REQUIRE_EXTENSIONS
+	#define __DMGRUL_EXT_WAS_REQUIRED
+#endif
+
+#undef REQUIRE_EXTENSIONS
 #tryinclude <wpnhack>
+
+#if defined __DMGRUL_EXT_WAS_REQUIRED
+	#define REQUIRE_EXTENSIONS
+#endif
 
 #if defined GAME_TF2
 #include <tf2_stocks>
