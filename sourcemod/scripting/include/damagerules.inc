@@ -9,6 +9,9 @@
 
 #include <sdkhooks>
 
+#define DMG_CRITICAL DMG_ACID
+#define DMG_IGNITE DMG_PLASMA
+
 #if defined REQUIRE_EXTENSIONS
 	#define __DMGRUL_EXT_WAS_REQUIRED
 #endif
