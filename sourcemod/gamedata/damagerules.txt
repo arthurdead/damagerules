@@ -80,6 +80,11 @@
 				"library" "server"
 				"linux" "@_ZN9CTFPlayer23ApplyAbsVelocityImpulseERK6Vector"
 			}
+			"SelectDeathPoseActivityAndFrame"
+			{
+				"library" "server"
+				"linux" "@_Z31SelectDeathPoseActivityAndFrameP14CBaseAnimatingRK15CTakeDamageInfoiR8ActivityRi"
+			}
 		}
 		"Offsets"
 		{
@@ -134,6 +139,10 @@
 			"CBaseCombatCharacter::Event_Killed"
 			{
 				"linux" "67"
+			}
+			"CBaseCombatCharacter::GetDeathActivity"
+			{
+				"linux" "289"
 			}
 			"CMultiplayRules::DeathNotice"
 			{

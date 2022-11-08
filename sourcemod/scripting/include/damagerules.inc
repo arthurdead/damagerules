@@ -18,6 +18,7 @@
 
 #undef REQUIRE_EXTENSIONS
 #tryinclude <wpnhack>
+#tryinclude <animhelpers>
 
 #if defined __DMGRUL_EXT_WAS_REQUIRED
 	#define REQUIRE_EXTENSIONS
@@ -125,6 +126,11 @@ native int EntityTakeDamage(int entity, const CTakeDamageInfoVar info);
 
 native int EntityOnTakeDamage(int entity, const CTakeDamageInfoVar info);
 native int EntityOnTakeDamageAlive(int entity, const CTakeDamageInfoVar info);
+
+#if defined animhelpers_included
+native void SelectDeathPoseActivityAndFrame(int entity, const CTakeDamageInfoVar info, int hitgroup, Activity &activity, int &frame);
+native Activity CombatCharacterGetDeathActivity(int entity);
+#endif
 
 native void CombatCharacterEventKilled(int entity, const CTakeDamageInfoVar info);
 

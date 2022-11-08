@@ -75,6 +75,8 @@ using namespace std::literals::string_view_literals;
 #include <ServerNetworkProperty.h>
 #include <tier1/checksum_crc.h>
 
+#include <death_pose.h>
+
 /**
  * @file extension.cpp
  * @brief Implement extension code here.
@@ -205,6 +207,13 @@ int IndexOfEdict(edict_t *pEdict)
 edict_t *GetHandleEntity(const CBaseHandle &hndl)
 {
 	return gamehelpers->GetHandleEntity(const_cast<CBaseHandle &>(hndl));
+}
+
+void *SelectDeathPoseActivityAndFramePtr{nullptr};
+
+void SelectDeathPoseActivityAndFrame( CBaseAnimating *entity, const CTakeDamageInfo &info, int hitgroup, Activity& activity, int& frame )
+{
+	(void_to_func<void (*)(CBaseAnimating *, const CTakeDamageInfo &, int, Activity&, int&)>(SelectDeathPoseActivityAndFramePtr))(entity, info, hitgroup, activity, frame);
 }
 
 int CBaseEntityIsNPC = -1;
@@ -352,6 +361,7 @@ int CBaseCombatCharacterCheckTraceHullAttackRange = -1;
 int CBaseCombatCharacterCheckTraceHullAttackEndPoint = -1;
 void *CBaseCombatCharacterEvent_Killed = nullptr;
 int CBaseCombatCharacterOnTakeDamage_AliveOffset = -1;
+int CBaseCombatCharacterGetDeathActivity = -1;
 
 class CBaseCombatCharacter : public CBaseAnimating
 {
@@ -379,6 +389,11 @@ public:
 	int OnTakeDamage_Alive(const CTakeDamageInfo &info)
 	{
 		return call_vfunc<int, CBaseCombatCharacter, const CTakeDamageInfo &>(this, CBaseCombatCharacterOnTakeDamage_AliveOffset, info);
+	}
+
+	Activity GetDeathActivity()
+	{
+		return call_vfunc<Activity, CBaseCombatCharacter>(this, CBaseCombatCharacterGetDeathActivity);
 	}
 };
 
@@ -1188,6 +1203,51 @@ static cell_t CallOnTakeDamageAlive(IPluginContext *pContext, const cell_t *para
 	return (callback_holder_t::inside_callback[1] ? SH_MCALL(pEntity, OnTakeDamageAlive)(info) : pEntity->OnTakeDamage_Alive(info));
 }
 
+cell_t SelectDeathPoseActivityAndFrameNative(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	cell_t *addr = nullptr;
+	pContext->LocalToPhysAddr(params[2], &addr);
+	
+	CTakeDamageInfo info{};
+	::AddrToDamageInfo(info, addr);
+
+	Activity act = ACT_INVALID;
+	int frame = 0;
+
+	SelectDeathPoseActivityAndFrame( (CBaseAnimating *)pSubject, info, params[3], act, frame );
+
+	pContext->LocalToPhysAddr(params[4], &addr);
+	*addr = (cell_t)act;
+
+	pContext->LocalToPhysAddr(params[5], &addr);
+	*addr = frame;
+
+	return 0;
+}
+
+cell_t CombatCharacterGetDeathActivity(IPluginContext *pContext, const cell_t *params)
+{
+	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
+	if(!pSubject)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+	
+	CBaseCombatCharacter *pCombat = pSubject->MyCombatCharacterPointer();
+	if(!pCombat)
+	{
+		return pContext->ThrowNativeError("Invalid Entity Reference/Index %i", params[1]);
+	}
+
+	return (cell_t)pCombat->GetDeathActivity();
+}
+
 cell_t CombatCharacterEventKilled(IPluginContext *pContext, const cell_t *params)
 {
 	CBaseEntity *pSubject = gamehelpers->ReferenceToEntity(params[1]);
@@ -1751,6 +1811,8 @@ static const sp_nativeinfo_t g_sNativesInfo[] =
 	{"EntityTakeDamage", TakeDamage},
 	{"CombatCharacterHullAttackRange", CombatCharacterHullAttackRange},
 	{"CombatCharacterHullAttackEndPoint", CombatCharacterHullAttackEndPoint},
+	{"SelectDeathPoseActivityAndFrame", SelectDeathPoseActivityAndFrameNative},
+	{"CombatCharacterGetDeathActivity", CombatCharacterGetDeathActivity},
 	{"CombatCharacterEventKilled", CombatCharacterEventKilled},
 	{"CalculateExplosiveDamageForce", CalculateExplosiveDamageForceNative},
 	{"CalculateBulletDamageForce", CalculateBulletDamageForceNative},
@@ -2607,8 +2669,8 @@ void ModifyDamage( CTakeDamageInfo *info )
 	CBaseEntity *pInflictor = info->GetInflictor();
 	CTFWeaponBase *pWeapon = (CTFWeaponBase *)info->GetWeapon();
 
-	const char *inflictor_classname = pInflictor->GetClassname();
 	//TODO!!!! better way to do this
+	const char *inflictor_classname = pInflictor->GetClassname();
 	if(pInflictor && (strcmp(inflictor_classname, "obj_sentrygun") == 0 || strcmp(inflictor_classname, "tf_projectile_sentryrocket") == 0)) {
 		info->SetDamage( info->GetDamage() * tf_npc_dmg_mult_sentry.GetFloat() );
 	} else if(pWeapon) {
@@ -2785,15 +2847,6 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	{
 		// no friendly fire damage
 		RETURN_META_VALUE(MRES_SUPERCEDE, override_result ? result_override : 0);
-	}
-
-	// weapon-specific damage modification
-	ModifyDamage( &info );
-
-	if ( info.GetDamageType() & DMG_CRITICAL )
-	{
-		// do the critical damage increase
-		info.SetDamage( info.GetDamage() * GetCritInjuryMultiplier() );
 	}
 
 	CTFPlayer *attackerPlayer = (CTFPlayer *)info.GetAttacker()->GetPlayer();
@@ -3417,6 +3470,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 
 	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
 
+	g_pGameConf->GetMemSig("SelectDeathPoseActivityAndFrame", &SelectDeathPoseActivityAndFramePtr);
+
 	g_pGameConf->GetOffset("CBaseAnimating::Ignite", &CBaseAnimatingIgnite);
 	g_pGameConf->GetOffset("NextBotCombatCharacter::Ignite", &NextBotCombatCharacterIgnite);
 
@@ -3434,6 +3489,8 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(Vector)", &CBaseCombatCharacterCheckTraceHullAttackEndPoint);
 
 	g_pGameConf->GetMemSig("CBaseCombatCharacter::Event_Killed", &CBaseCombatCharacterEvent_Killed);
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::GetDeathActivity", &CBaseCombatCharacterGetDeathActivity);
 
 	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
 	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
