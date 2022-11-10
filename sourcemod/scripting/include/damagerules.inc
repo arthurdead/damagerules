@@ -98,8 +98,17 @@ enum
 
 #define CTakeDamageInfoVar any[]
 
-typedef ondamage_func_t = function Action (int entity, CTakeDamageInfo info, int &result);
-typedef killed_func_t = function Action (int entity, CTakeDamageInfo info);
+typeset ondamage_func_t
+{
+	function Action (int entity, CTakeDamageInfo info, int &result);
+	function void (int entity, const CTakeDamageInfo info, int result);
+};
+
+typeset killed_func_t
+{
+	function Action (int entity, CTakeDamageInfo info, int &result);
+	function void (int entity, const CTakeDamageInfo info, int result);
+};
 
 #if defined GAME_TF2
 enum struct DamageModifyExtras_t
@@ -143,7 +152,6 @@ native void HookEntityKilled(int entity, killed_func_t func, bool post);
 
 native void PushAllPlayersAway(const float vFromThisPoint[3], float flRange, float flForce, int nTeam, ArrayList PushedPlayers = null);
 
-//TODO!!! move this somewhere else idk where
 native void ApplyAbsVelocityImpulse(int entity, const float vecImpulse[3]);
 
 native void CalculateExplosiveDamageForce(CTakeDamageInfoVar info, const float vecForceDir[3], const float vecForceOrigin[3], float flScale);

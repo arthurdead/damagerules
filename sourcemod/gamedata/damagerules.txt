@@ -192,6 +192,10 @@
 			{
 				"linux" "303"
 			}
+			"CBaseEntity::UpdateOnRemove"
+			{
+				"linux" "109"
+			}
 		}
 	}
 }

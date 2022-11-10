@@ -850,6 +850,7 @@ static cell_t ApplyOnDamageAliveModifyRules(IPluginContext *pContext, const cell
 #endif
 
 SH_DECL_MANUALHOOK0_void(GenericDtor, 1, 0, 0)
+SH_DECL_MANUALHOOK0_void(UpdateOnRemove, 0, 0, 0)
 
 SH_DECL_MANUALHOOK1(OnTakeDamage, 0, 0, 0, int, const CTakeDamageInfo &)
 SH_DECL_MANUALHOOK1(OnTakeDamageAlive, 0, 0, 0, int, const CTakeDamageInfo &)
@@ -953,16 +954,16 @@ struct callback_holder_t
 	{ return callbacks[2][post ? 1 : 0]; }
 
 	std::vector<IdentityToken_t *> owners{};
-	bool erase = true;
 	int ref = -1;
 	entity_type type = entity_any;
-	
+	std::vector<int> hookids{};
+
 	callback_holder_t(CBaseEntity *pEntity, int ref_);
 	~callback_holder_t();
 	
-	void dtor(CBaseEntity *pEntity);
+	void removed(CBaseEntity *pEntity);
 
-	void HookEntityDtor();
+	void HookEntityRemoved();
 
 	META_RES SPOnTakeDamage(CBaseEntity *pEntity, CTakeDamageInfo &info, int &result, bool post)
 	{
@@ -974,22 +975,27 @@ struct callback_holder_t
 
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
-		
-		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, SM_PARAM_COPYBACK);
-		fwd->PushCellByRef((cell_t *)&result);
-		cell_t res = 0;
 
+		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
+		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, post ? 0 : SM_PARAM_COPYBACK);
+		if(!post) {
+			fwd->PushCellByRef((cell_t *)&result);
+		} else {
+			fwd->PushCell(result);
+		}
+		cell_t res = 0;
 		inside_callback[0] = true;
-		fwd->Execute(&res);
+		fwd->Execute(post ? nullptr : &res);
 		inside_callback[0] = false;
 
-		if(res == Pl_Changed) {
-			::AddrToDamageInfo(info, addr);
-		} else if(res >= Pl_Handled) {
-			result = 0;
+		if(!post) {
+			if(res == Pl_Changed) {
+				::AddrToDamageInfo(info, addr);
+			} else if(res >= Pl_Handled) {
+				result = 0;
+			}
 		}
-		
+
 		return res_to_meta_res(res);
 	}
 	
@@ -1027,22 +1033,27 @@ struct callback_holder_t
 
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
-		
-		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
-		fwd->PushCellByRef((cell_t *)&result);
-		cell_t res = 0;
 
+		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
+		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, post ? 0 : SM_PARAM_COPYBACK);
+		if(!post) {
+			fwd->PushCellByRef((cell_t *)&result);
+		} else {
+			fwd->PushCell(result);
+		}
+		cell_t res = 0;
 		inside_callback[1] = true;
-		fwd->Execute(&res);
+		fwd->Execute(post ? nullptr : &res);
 		inside_callback[1] = false;
 
-		if(res == Pl_Changed) {
-			::AddrToDamageInfo(info, addr);
-		} else if(res >= Pl_Handled) {
-			result = 0;
+		if(!post) {
+			if(res == Pl_Changed) {
+				::AddrToDamageInfo(info, addr);
+			} else if(res >= Pl_Handled) {
+				result = 0;
+			}
 		}
-		
+
 		return res_to_meta_res(res);
 	}
 
@@ -1080,19 +1091,20 @@ struct callback_holder_t
 
 		cell_t addr[DAMAGEINFO_STRUCT_SIZE_IN_CELL]{0};
 		::DamageInfoToAddr(info, addr);
-		
-		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
-		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL);
-		cell_t res = 0;
 
+		fwd->PushCell(gamehelpers->EntityToBCompatRef(pEntity));
+		fwd->PushArray(addr, DAMAGEINFO_STRUCT_SIZE_IN_CELL, post ? 0 : SM_PARAM_COPYBACK);
+		cell_t res = 0;
 		inside_callback[2] = true;
-		fwd->Execute(&res);
+		fwd->Execute(post ? nullptr : &res);
 		inside_callback[2] = false;
 
-		if(res == Pl_Changed) {
-			::AddrToDamageInfo(info, addr);
+		if(!post) {
+			if(res == Pl_Changed) {
+				::AddrToDamageInfo(info, addr);
+			}
 		}
-		
+
 		return res_to_meta_res(res);
 	}
 
@@ -1124,14 +1136,18 @@ struct callback_holder_t
 	{
 		callback_t &callback{takedmg(post)};
 
-		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		if(!post) {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		} else {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Ignore, 3, nullptr, Param_Cell, Param_Array, Param_Cell);
+		}
 
 		if(type != entity_npc) {
 			if(type != entity_player) {
 				if(!post) {
-					SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_pre), false);
+					hookids.emplace_back(SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_pre), false));
 				} else {
-					SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_post), true);
+					hookids.emplace_back(SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_post), true));
 				}
 				callback.hooked = true;
 			}
@@ -1142,13 +1158,17 @@ struct callback_holder_t
 	{
 		callback_t &callback{takedmgalive(post)};
 
-		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		if(!post) {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 3, nullptr, Param_Cell, Param_Array, Param_CellByRef);
+		} else {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Ignore, 3, nullptr, Param_Cell, Param_Array, Param_Cell);
+		}
 
 		if(type != entity_npc) {
 			if(!post) {
-				SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_pre), false);
+				hookids.emplace_back(SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_pre), false));
 			} else {
-				SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_post), true);
+				hookids.emplace_back(SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_post), true));
 			}
 			callback.hooked = true;
 		}
@@ -1158,13 +1178,17 @@ struct callback_holder_t
 	{
 		callback_t &callback{killed(post)};
 
-		callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 2, nullptr, Param_Cell, Param_Array);
+		if(!post) {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Hook, 2, nullptr, Param_Cell, Param_Array);
+		} else {
+			callback.fwd = forwards->CreateForwardEx(nullptr, ET_Ignore, 2, nullptr, Param_Cell, Param_Array);
+		}
 
 		if(type != entity_npc) {
 			if(!post) {
-				SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_pre), false);
+				hookids.emplace_back(SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_pre), false));
 			} else {
-				SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_post), true);
+				hookids.emplace_back(SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_post), true));
 			}
 			callback.hooked = true;
 		}
@@ -1296,42 +1320,20 @@ void callback_holder_t::erase_from_map(int ref)
 	}
 }
 
-void callback_holder_t::HookEntityDtor()
+void callback_holder_t::HookEntityRemoved()
 {
 	CBaseEntity *pEntity = META_IFACEPTR(CBaseEntity);
 	int this_ref = gamehelpers->EntityToReference(pEntity);
-	dtor(pEntity);
+	removed(pEntity);
 	erase_from_map(this_ref);
-	erase = false;
 	delete this;
 	RETURN_META(MRES_HANDLED);
 }
 
-void callback_holder_t::dtor(CBaseEntity *pEntity)
+void callback_holder_t::removed(CBaseEntity *pEntity)
 {
-	SH_REMOVE_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
-
-	if(type != entity_npc) {
-		if(type != entity_player) {
-			if(takedmg(false).hooked) {
-				SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_pre), false);
-			}
-			if(takedmg(true).hooked) {
-				SH_REMOVE_MANUALHOOK(OnTakeDamage, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamage_post), true);
-			}
-		}
-		if(takedmgalive(false).hooked) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_pre), false);
-		}
-		if(takedmgalive(true).hooked) {
-			SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_MEMBER(this, &callback_holder_t::HookOnTakeDamageAlive_post), true);
-		}
-		if(killed(false).hooked) {
-			SH_REMOVE_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_pre), false);
-		}
-		if(killed(true).hooked) {
-			SH_REMOVE_MANUALHOOK(Event_Killed, pEntity, SH_MEMBER(this, &callback_holder_t::HookEvent_Killed_post), true);
-		}
+	for(int id : hookids) {
+		SH_REMOVE_HOOK_ID(id);
 	}
 }
 
@@ -1344,8 +1346,8 @@ callback_holder_t::callback_holder_t(CBaseEntity *pEntity, int ref_)
 		type = entity_npc;
 	}
 
-	SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityDtor), false);
-	
+	hookids.emplace_back(SH_ADD_MANUALHOOK(UpdateOnRemove, pEntity, SH_MEMBER(this, &callback_holder_t::HookEntityRemoved), false));
+
 	callbackmap.emplace(ref, this);
 
 	switch(type) {
@@ -1368,10 +1370,6 @@ callback_holder_t::~callback_holder_t()
 		if(callback[1].fwd) {
 			forwards->ReleaseForward(callback[1].fwd);
 		}
-	}
-
-	if(erase) {
-		erase_from_map(ref);
 	}
 }
 
@@ -1868,9 +1866,8 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 				}
 				CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(holder->ref);
 				if(pEntity) {
-					holder->dtor(pEntity);
+					holder->removed(pEntity);
 				}
-				holder->erase = false;
 				delete holder;
 				it = callbackmap.erase(it);
 				continue;
@@ -3255,11 +3252,11 @@ void hook_npc_killed(const CTakeDamageInfo &info)
 	RETURN_META(MRES_SUPERCEDE);
 }
 
-void hook_npc_dtor()
+void hook_npc_removed()
 {
 	CBaseEntity *pThis = META_IFACEPTR(CBaseEntity);
 
-	SH_REMOVE_MANUALHOOK(GenericDtor, pThis, SH_STATIC(hook_npc_dtor), false);
+	SH_REMOVE_MANUALHOOK(UpdateOnRemove, pThis, SH_STATIC(hook_npc_removed), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamage, pThis, SH_STATIC(hook_npc_takedamage), false);
 	SH_REMOVE_MANUALHOOK(OnTakeDamageAlive, pThis, SH_STATIC(hook_npc_takedamagealive), false);
 	SH_REMOVE_MANUALHOOK(Event_Killed, pThis, SH_STATIC(hook_npc_killed), false);
@@ -3283,7 +3280,7 @@ void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
 	} else {
 		npc_type ntype{g_pNextBot->entity_to_npc_type(pEntity, classname)};
 		if(ntype == npc_custom) {
-			SH_ADD_MANUALHOOK(GenericDtor, pEntity, SH_STATIC(hook_npc_dtor), false);
+			SH_ADD_MANUALHOOK(UpdateOnRemove, pEntity, SH_STATIC(hook_npc_removed), false);
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
 			SH_ADD_MANUALHOOK(OnTakeDamageAlive, pEntity, SH_STATIC(hook_npc_takedamagealive), false);
 			SH_ADD_MANUALHOOK(Event_Killed, pEntity, SH_STATIC(hook_npc_killed), false);
@@ -3418,84 +3415,262 @@ bool Sample::SDK_OnMetamodLoad(ISmmAPI *ismm, char *error, size_t maxlen, bool l
 
 bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 {
-	gameconfs->LoadGameConfigFile("sdktools.games", &g_pGameConf, nullptr, 0);
-	
+	if(!gameconfs->LoadGameConfigFile("sdktools.games", &g_pGameConf, error, maxlen)) {
+		return false;
+	}
+
 	g_szGameRulesProxy = g_pGameConf->GetKeyValue("GameRulesProxy");
-	
+
 	gameconfs->CloseGameConfigFile(g_pGameConf);
-	
-	gameconfs->LoadGameConfigFile("damagerules", &g_pGameConf, nullptr, 0);
+
+	if(!gameconfs->LoadGameConfigFile("damagerules", &g_pGameConf, error, maxlen)) {
+		return false;
+	}
+
+	int CBaseEntityUpdateOnRemove{-1};
+	g_pGameConf->GetOffset("CBaseEntity::UpdateOnRemove", &CBaseEntityUpdateOnRemove);
+	if(CBaseEntityUpdateOnRemove == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::UpdateOnRemove offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseEntity::IsNPC", &CBaseEntityIsNPC);
+	if(CBaseEntityIsNPC == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::IsNPC offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CGameRules::GetSkillLevel", &CGameRulesGetSkillLevel);
+	if(CGameRulesGetSkillLevel == -1) {
+		snprintf(error, maxlen, "could not get CGameRules::GetSkillLevel offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageTaken", &CGameRulesAdjustPlayerDamageTaken);
+	if(CGameRulesAdjustPlayerDamageTaken == -1) {
+		snprintf(error, maxlen, "could not get CGameRules::AdjustPlayerDamageTaken offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageInflicted", &CGameRulesAdjustPlayerDamageInflicted);
+	if(CGameRulesAdjustPlayerDamageInflicted == -1) {
+		snprintf(error, maxlen, "could not get CGameRules::AdjustPlayerDamageInflicted offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CGameRules::ShouldUseRobustRadiusDamage", &CGameRulesShouldUseRobustRadiusDamage);
+	if(CGameRulesShouldUseRobustRadiusDamage == -1) {
+		snprintf(error, maxlen, "could not get CGameRulesShouldUseRobustRadiusDamage offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CGameRules::GetAmmoDamage", &CGameRulesGetAmmoDamageOffset);
+	if(CGameRulesGetAmmoDamageOffset == -1) {
+		snprintf(error, maxlen, "could not get CGameRules::GetAmmoDamage offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNoticeOffset);
+	if(CMultiplayRulesDeathNoticeOffset == -1) {
+		snprintf(error, maxlen, "could not get CMultiplayRules::DeathNotice offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CMultiplayRules::GetDeathScorer", &CMultiplayRulesGetDeathScorerOffset);
+	if(CMultiplayRulesGetDeathScorerOffset == -1) {
+		snprintf(error, maxlen, "could not get CMultiplayRules::GetDeathScorer offset");
+		return false;
+	}
+
+#if SOURCE_ENGINE == SE_TF2
+	g_pGameConf->GetOffset("CTFGameRules::DeathNotice", &CTFGameRulesDeathNotice);
+	if(CTFGameRulesDeathNotice == -1) {
+		snprintf(error, maxlen, "could not get CMultiplayRules::GetDeathScorer offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
+	if(CTFWeaponBaseApplyOnHitAttributes == -1) {
+		snprintf(error, maxlen, "could not get CTFWeaponBase::ApplyOnHitAttributes offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CTFWeaponBase::GetWeaponID", &CTFWeaponBaseGetWeaponID);
+	if(CTFWeaponBaseGetWeaponID == -1) {
+		snprintf(error, maxlen, "could not get CTFWeaponBase::GetWeaponID offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseObject::Killed", &CBaseObjectKilled);
+	if(CBaseObjectKilled == -1) {
+		snprintf(error, maxlen, "could not get CBaseObject::Killed offset");
+		return false;
+	}
+#endif
+
+	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
+	if(CBaseEntityOnTakeDamageOffset == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::OnTakeDamage offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseCombatCharacterOnTakeDamage_AliveOffset);
+	if(CBaseCombatCharacterOnTakeDamage_AliveOffset == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::OnTakeDamage_Alive offset");
+		return false;
+	}
+
+#if SOURCE_ENGINE == SE_TF2
+	g_pGameConf->GetMemSig("HandleRageGain", &HandleRageGainPtr);
+	if(HandleRageGainPtr == nullptr) {
+		snprintf(error, maxlen, "could not get HandleRageGain address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CTFPlayer::OnDealtDamage", &CTFPlayerOnDealtDamage);
+	if(CTFPlayerOnDealtDamage == nullptr) {
+		snprintf(error, maxlen, "could not get CTFPlayer::OnDealtDamage address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageModifyRules", &CTFGameRulesApplyOnDamageModifyRules);
+	if(CTFGameRulesApplyOnDamageModifyRules == nullptr) {
+		snprintf(error, maxlen, "could not get CTFGameRules::ApplyOnDamageModifyRules address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
+	if(CTFGameRulesApplyOnDamageAliveModifyRules == nullptr) {
+		snprintf(error, maxlen, "could not get CTFGameRules::ApplyOnDamageAliveModifyRules address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CTFGameRules::PushAllPlayersAway", &CTFGameRulesPushAllPlayersAway);
+	if(CTFGameRulesPushAllPlayersAway == nullptr) {
+		snprintf(error, maxlen, "could not get CTFGameRules::PushAllPlayersAway address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CTFPlayer::ApplyAbsVelocityImpulse", &CTFPlayerApplyAbsVelocityImpulse);
+	if(CTFPlayerApplyAbsVelocityImpulse == nullptr) {
+		snprintf(error, maxlen, "could not get CTFPlayer::ApplyAbsVelocityImpulse address");
+		return false;
+	}
+#endif
+
+	g_pGameConf->GetMemSig("CBaseEntity::ApplyAbsVelocityImpulse", &CBaseEntityApplyAbsVelocityImpulse);
+	if(CBaseEntityApplyAbsVelocityImpulse == nullptr) {
+		snprintf(error, maxlen, "could not get CBaseEntity::ApplyAbsVelocityImpulse address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
+	if(CBaseEntityTakeDamage == nullptr) {
+		snprintf(error, maxlen, "could not get CBaseEntity::TakeDamage address");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("SelectDeathPoseActivityAndFrame", &SelectDeathPoseActivityAndFramePtr);
+	if(SelectDeathPoseActivityAndFramePtr == nullptr) {
+		snprintf(error, maxlen, "could not get SelectDeathPoseActivityAndFrame address");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseAnimating::Ignite", &CBaseAnimatingIgnite);
+	if(CBaseAnimatingIgnite == -1) {
+		snprintf(error, maxlen, "could not get CBaseAnimating::Ignite offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("NextBotCombatCharacter::Ignite", &NextBotCombatCharacterIgnite);
+	if(NextBotCombatCharacterIgnite == -1) {
+		snprintf(error, maxlen, "could not get NextBotCombatCharacter::Ignite offset");
+		return false;
+	}
+
+#if SOURCE_ENGINE == SE_TF2
+	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
+	if(CBaseCombatCharacterGetBossType == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::GetBossType offset");
+		return false;
+	}
+#endif
+
+	g_pGameConf->GetOffset("CBaseEntity::MyCombatCharacterPointer", &CBaseEntityMyCombatCharacterPointer);
+	if(CBaseEntityMyCombatCharacterPointer == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::MyCombatCharacterPointer offset");
+		return false;
+	}
+
+	int CBaseCombatCharacterEvent_Killed_offset{-1};
+	g_pGameConf->GetOffset("CBaseCombatCharacter::Event_Killed", &CBaseCombatCharacterEvent_Killed_offset);
+	if(CBaseCombatCharacterEvent_Killed_offset == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::Event_Killed offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(float)", &CBaseCombatCharacterCheckTraceHullAttackRange);
+	if(CBaseCombatCharacterCheckTraceHullAttackRange == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::CheckTraceHullAttack(float) offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(Vector)", &CBaseCombatCharacterCheckTraceHullAttackEndPoint);
+	if(CBaseCombatCharacterCheckTraceHullAttackEndPoint == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::CheckTraceHullAttack(Vector) offset");
+		return false;
+	}
+
+	g_pGameConf->GetMemSig("CBaseCombatCharacter::Event_Killed", &CBaseCombatCharacterEvent_Killed);
+	if(CBaseCombatCharacterEvent_Killed == nullptr) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::Event_Killed address");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseCombatCharacter::GetDeathActivity", &CBaseCombatCharacterGetDeathActivity);
+	if(CBaseCombatCharacterGetDeathActivity == -1) {
+		snprintf(error, maxlen, "could not get CBaseCombatCharacter::Event_Killed offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
+	if(CBaseEntityIsPlayer == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::IsPlayer offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
+	if(CBaseEntityClassify == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::Classify offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBasePlayer::IsBot", &CBasePlayerIsBot);
+	if(CBasePlayerIsBot == -1) {
+		snprintf(error, maxlen, "could not get CBasePlayer::IsBot offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseEntity::Event_KilledOther", &CBaseEntityEvent_KilledOtherOffset);
+	if(CBaseEntityEvent_KilledOtherOffset == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::Event_KilledOther offset");
+		return false;
+	}
 
 	CDetourManager::Init(g_pSM->GetScriptingEngine(), g_pGameConf);
 
 	pSW_GameStats_WriteKill = DETOUR_CREATE_MEMBER(SW_GameStats_WriteKill, "CTFGameStats::SW_GameStats_WriteKill")
+	if(!pSW_GameStats_WriteKill) {
+		snprintf(error, maxlen, "could not create CTFGameStats::SW_GameStats_WriteKill detour");
+		return false;
+	}
+
 	pSW_GameStats_WriteKill->EnableDetour();
 
-	g_pGameConf->GetOffset("CBaseEntity::IsNPC", &CBaseEntityIsNPC);
-	g_pGameConf->GetOffset("CGameRules::GetSkillLevel", &CGameRulesGetSkillLevel);
-	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageTaken", &CGameRulesAdjustPlayerDamageTaken);
-	g_pGameConf->GetOffset("CGameRules::AdjustPlayerDamageInflicted", &CGameRulesAdjustPlayerDamageInflicted);
-	g_pGameConf->GetOffset("CGameRules::ShouldUseRobustRadiusDamage", &CGameRulesShouldUseRobustRadiusDamage);
-	g_pGameConf->GetOffset("CGameRules::GetAmmoDamage", &CGameRulesGetAmmoDamageOffset);
-
-	g_pGameConf->GetOffset("CMultiplayRules::DeathNotice", &CMultiplayRulesDeathNoticeOffset);
-	g_pGameConf->GetOffset("CMultiplayRules::GetDeathScorer", &CMultiplayRulesGetDeathScorerOffset);
-
-	g_pGameConf->GetOffset("CTFGameRules::DeathNotice", &CTFGameRulesDeathNotice);
-
-#if SOURCE_ENGINE == SE_TF2
-	g_pGameConf->GetOffset("CTFWeaponBase::ApplyOnHitAttributes", &CTFWeaponBaseApplyOnHitAttributes);
-
-	g_pGameConf->GetOffset("CTFWeaponBase::GetWeaponID", &CTFWeaponBaseGetWeaponID);
-
-	g_pGameConf->GetOffset("CBaseObject::Killed", &CBaseObjectKilled);
-#endif
-	
-	g_pGameConf->GetOffset("CBaseEntity::OnTakeDamage", &CBaseEntityOnTakeDamageOffset);
+	SH_MANUALHOOK_RECONFIGURE(Event_Killed, CBaseCombatCharacterEvent_Killed_offset, 0, 0);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamage, CBaseEntityOnTakeDamageOffset, 0, 0);
-	
-	g_pGameConf->GetOffset("CBaseCombatCharacter::OnTakeDamage_Alive", &CBaseCombatCharacterOnTakeDamage_AliveOffset);
 	SH_MANUALHOOK_RECONFIGURE(OnTakeDamageAlive, CBaseCombatCharacterOnTakeDamage_AliveOffset, 0, 0);
-	
-#if SOURCE_ENGINE == SE_TF2
-	g_pGameConf->GetMemSig("HandleRageGain", &HandleRageGainPtr);
-	g_pGameConf->GetMemSig("CTFPlayer::OnDealtDamage", &CTFPlayerOnDealtDamage);
-	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageModifyRules", &CTFGameRulesApplyOnDamageModifyRules);
-	g_pGameConf->GetMemSig("CTFGameRules::ApplyOnDamageAliveModifyRules", &CTFGameRulesApplyOnDamageAliveModifyRules);
-	g_pGameConf->GetMemSig("CTFGameRules::PushAllPlayersAway", &CTFGameRulesPushAllPlayersAway);
-	g_pGameConf->GetMemSig("CTFPlayer::ApplyAbsVelocityImpulse", &CTFPlayerApplyAbsVelocityImpulse);
-#endif
-
-	g_pGameConf->GetMemSig("CBaseEntity::ApplyAbsVelocityImpulse", &CBaseEntityApplyAbsVelocityImpulse);
-
-	g_pGameConf->GetMemSig("CBaseEntity::TakeDamage", &CBaseEntityTakeDamage);
-
-	g_pGameConf->GetMemSig("SelectDeathPoseActivityAndFrame", &SelectDeathPoseActivityAndFramePtr);
-
-	g_pGameConf->GetOffset("CBaseAnimating::Ignite", &CBaseAnimatingIgnite);
-	g_pGameConf->GetOffset("NextBotCombatCharacter::Ignite", &NextBotCombatCharacterIgnite);
-
-#if SOURCE_ENGINE == SE_TF2
-	g_pGameConf->GetOffset("CBaseCombatCharacter::GetBossType", &CBaseCombatCharacterGetBossType);
-#endif
-
-	g_pGameConf->GetOffset("CBaseEntity::MyCombatCharacterPointer", &CBaseEntityMyCombatCharacterPointer);
-
-	int offset = -1;
-	g_pGameConf->GetOffset("CBaseCombatCharacter::Event_Killed", &offset);
-	SH_MANUALHOOK_RECONFIGURE(Event_Killed, offset, 0, 0);
-
-	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(float)", &CBaseCombatCharacterCheckTraceHullAttackRange);
-	g_pGameConf->GetOffset("CBaseCombatCharacter::CheckTraceHullAttack(Vector)", &CBaseCombatCharacterCheckTraceHullAttackEndPoint);
-
-	g_pGameConf->GetMemSig("CBaseCombatCharacter::Event_Killed", &CBaseCombatCharacterEvent_Killed);
-
-	g_pGameConf->GetOffset("CBaseCombatCharacter::GetDeathActivity", &CBaseCombatCharacterGetDeathActivity);
-
-	g_pGameConf->GetOffset("CBaseEntity::IsPlayer", &CBaseEntityIsPlayer);
-	g_pGameConf->GetOffset("CBaseEntity::Classify", &CBaseEntityClassify);
-	g_pGameConf->GetOffset("CBasePlayer::IsBot", &CBasePlayerIsBot);
-	g_pGameConf->GetOffset("CBaseEntity::Event_KilledOther", &CBaseEntityEvent_KilledOtherOffset);
+	SH_MANUALHOOK_RECONFIGURE(UpdateOnRemove, CBaseEntityUpdateOnRemove, 0, 0);
 
 	CBaseEntityGetNetworkableOffset = vfunc_index(&CBaseEntity::GetNetworkable);
 	CBaseEntitySetRefEHandleOffset = vfunc_index(&CBaseEntity::SetRefEHandle);
@@ -3544,7 +3719,7 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 #ifdef __HAS_WPNHACK
 	sharesys->AddDependency(myself, "wpnhack.ext", false, true);
 #endif
-	
+
 	sharesys->RegisterLibrary(myself, "damagerules");
 
 	HandleSystemHack::init();
