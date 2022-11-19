@@ -196,6 +196,10 @@
 			{
 				"linux" "109"
 			}
+			"CBaseEntity::MyNextBotPointer"
+			{
+				"linux" "73"
+			}
 		}
 	}
 }

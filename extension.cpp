@@ -30,12 +30,10 @@
  */
 
 #include <unordered_map>
-#include <string_view>
 #include <string>
 #include <stack>
 
 using namespace std::literals::string_literals;
-using namespace std::literals::string_view_literals;
 
 #ifdef __HAS_NEXTBOT
 #include <INextBotExt.h>
@@ -232,6 +230,9 @@ int m_hActiveWeaponOffset = -1;
 int m_iNameOffset = -1;
 
 void *CBaseEntityApplyAbsVelocityImpulse{nullptr};
+int CBaseEntityMyNextBotPointer{-1};
+
+class INextBot;
 
 class CBaseEntity : public IServerEntity
 {
@@ -285,6 +286,11 @@ public:
 		} else {
 			return false;
 		}
+	}
+
+	INextBot *MyNextBotPointer()
+	{
+		return call_vfunc<INextBot *>(this, CBaseEntityMyNextBotPointer);
 	}
 
 	bool IsNPC()
@@ -942,7 +948,7 @@ struct callback_t
 struct callback_holder_t
 {
 	callback_t callbacks[NUM_CALLBACKS][2];
-	static inline bool inside_callback[NUM_CALLBACKS]{false};
+	static bool inside_callback[NUM_CALLBACKS];
 
 	callback_t &takedmg(bool post)
 	{ return callbacks[0][post ? 1 : 0]; }
@@ -1195,6 +1201,8 @@ struct callback_holder_t
 	}
 };
 
+bool callback_holder_t::inside_callback[NUM_CALLBACKS];
+
 static cell_t CallOnTakeDamage(IPluginContext *pContext, const cell_t *params)
 {
 	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(params[1]);
@@ -1337,12 +1345,63 @@ void callback_holder_t::removed(CBaseEntity *pEntity)
 	}
 }
 
+#ifndef __HAS_NEXTBOT
+enum npc_type : unsigned char
+{
+	npc_none =    0,
+	npc_any =     (1 << 0),
+	npc_undead =  (1 << 1),
+	npc_default = (1 << 2),
+	npc_custom = (npc_any|(1 << 3)),
+#if SOURCE_ENGINE == SE_TF2
+	npc_zombie = (npc_default|npc_any|npc_undead|(1 << 4)),
+	npc_hhh =    (npc_default|npc_any|npc_undead|(1 << 5)),
+	npc_eye =    (npc_default|npc_any|npc_undead|(1 << 6)),
+	npc_wizard = (npc_default|npc_any|npc_undead|(1 << 7)),
+	npc_tank =   (npc_default|npc_any|(1 << 8)),
+#else
+	#error
+#endif
+};
+#endif
+
+static npc_type entity_to_npc_type(CBaseEntity *pEntity, const char *classname)
+{
+#ifdef __HAS_NEXTBOT
+	if(g_pNextBot) {
+		return g_pNextBot->entity_to_npc_type(pEntity, classname);
+	}
+#endif
+#if SOURCE_ENGINE == SE_TF2
+	if(strcmp(classname, "tf_zombie") == 0) {
+		return npc_zombie;
+	} else if(strcmp(classname, "headless_hatman") == 0) {
+		return npc_hhh;
+	} else if(strcmp(classname, "eyeball_boss") == 0) {
+		return npc_zombie;
+	} else if(strcmp(classname, "merasmus") == 0) {
+		return npc_wizard;
+	} else if(strcmp(classname, "tank_boss") == 0) {
+		return npc_tank;
+	} else if(strcmp(classname, "tf_bot") == 0) {
+		return npc_none;
+#else
+	#error
+#endif
+	} else if(strcmp(classname, "player") == 0) {
+		return npc_none;
+	} else if(!pEntity->IsPlayer() && pEntity->MyNextBotPointer()) {
+		return npc_custom;
+	}
+	return npc_none;
+}
+
 callback_holder_t::callback_holder_t(CBaseEntity *pEntity, int ref_)
 	: ref{ref_}
 {
 	if(pEntity->IsPlayer()) {
 		type = entity_player;
-	} else if(g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) == npc_custom) {
+	} else if(::entity_to_npc_type(pEntity, pEntity->GetClassname()) == npc_custom) {
 		type = entity_npc;
 	}
 
@@ -1835,9 +1894,10 @@ void Sample::OnPluginUnloaded(IPlugin *plugin)
 	callback_holder_map_t::iterator it{callbackmap.begin()};
 	while(it != callbackmap.end()) {
 		callback_holder_t *holder = it->second;
-		std::vector<IdentityToken_t *> &owners{holder->owners};
+		using owners_t = std::vector<IdentityToken_t *>;
+		owners_t &owners{holder->owners};
 
-		auto it_own{std::find(owners.begin(), owners.end(), plugin->GetIdentity())};
+		owners_t::iterator it_own{std::find(owners.begin(), owners.end(), plugin->GetIdentity())};
 		if(it_own != owners.cend()) {
 			owners.erase(it_own);
 
@@ -2223,7 +2283,7 @@ DETOUR_DECL_MEMBER1(ObjectKilled, void, const CTakeDamageInfo &, info)
 {
 	CBaseEntity *pKiller{info.GetAttacker()};
 
-	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
+	npc_type ntype{pKiller ? ::entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
 	if(ntype != npc_custom) {
 		DETOUR_MEMBER_CALL(ObjectKilled)(info);
 		return;
@@ -2338,7 +2398,7 @@ int hook_getuserid(const edict_t *e)
 	int idx = gamehelpers->IndexOfEdict(const_cast<edict_t *>(e));
 	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(idx);
 
-	npc_type ntype{pEntity ? g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
+	npc_type ntype{pEntity ? ::entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
 	if(ntype == npc_custom) {
 		RETURN_META_VALUE(MRES_SUPERCEDE, PLAYER_BLOCK_USERID);
 	}
@@ -2359,7 +2419,7 @@ const CSteamID *hook_getsteamid(edict_t *e)
 	int idx = gamehelpers->IndexOfEdict(const_cast<edict_t *>(e));
 	CBaseEntity *pEntity = gamehelpers->ReferenceToEntity(idx);
 
-	npc_type ntype{pEntity ? g_pNextBot->entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
+	npc_type ntype{pEntity ? ::entity_to_npc_type(pEntity, pEntity->GetClassname()) : npc_none};
 	if(ntype == npc_custom) {
 		RETURN_META_VALUE(MRES_SUPERCEDE, nullptr);
 	}
@@ -2398,7 +2458,7 @@ public:
 		bool override_result = false;
 		int result_override = 0;
 
-		auto it{player_callbackmap.find(gamehelpers->EntityToReference(this))};
+		callback_holder_map_t::iterator it{player_callbackmap.find(gamehelpers->EntityToReference(this))};
 		if(it != player_callbackmap.cend()) {
 			META_RES res = it->second->SPOnTakeDamage(this, playerDamage, result_override, false);
 			switch(res) {
@@ -2730,7 +2790,7 @@ int hook_npc_takedamage( const CTakeDamageInfo &rawInfo )
 	bool override_result = false;
 	int result_override = 0;
 
-	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
+	callback_holder_map_t::iterator it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
 		META_RES res = it->second->SPOnTakeDamage(pThis, info, result_override, false);
 		switch(res) {
@@ -2829,7 +2889,7 @@ int hook_npc_takedamagealive( const CTakeDamageInfo &rawInfo )
 	bool override_result = false;
 	int result_override = 0;
 
-	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
+	callback_holder_map_t::iterator it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
 		META_RES res = it->second->SPOnTakeDamageAlive(pThis, info, result_override, false);
 		switch(res) {
@@ -3143,7 +3203,7 @@ CBasePlayer *GameRulesVTableHack::DetourGetDeathScorer( CBaseEntity *pKiller, CB
 			return ((CBasePlayer *)player_block);
 		}
 
-		npc_type ntype{g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname())};
+		npc_type ntype{::entity_to_npc_type(pKiller, pKiller->GetClassname())};
 		if(ntype == npc_custom) {
 			return ((CBasePlayer *)player_block);
 		}
@@ -3161,7 +3221,8 @@ bool hook_fireevent(IGameEvent *event, bool bDontBroadcast)
 
 	IGameEventManager2 *pThis = META_IFACEPTR(IGameEventManager2);
 
-	playerdeath_event_t &npc_event{npc_death_events.emplace()};
+	npc_death_events.emplace();
+	playerdeath_event_t &npc_event{npc_death_events.top()};
 	npc_event.dont_broadcast = bDontBroadcast;
 
 	bf_write write{};
@@ -3180,7 +3241,7 @@ void GameRulesVTableHack::DetourDeathNotice(CBasePlayer *pVictim, const CTakeDam
 {
 	CBaseEntity *pKiller{info.GetAttacker()};
 
-	npc_type ntype{pKiller ? g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
+	npc_type ntype{pKiller ? ::entity_to_npc_type(pKiller, pKiller->GetClassname()) : npc_none};
 	if(ntype != npc_custom) {
 		CMultiplayRules::DeathNotice(pVictim, info);
 		return;
@@ -3224,7 +3285,7 @@ void hook_npc_killed(const CTakeDamageInfo &info)
 		eventName = "fish_notice";
 	}
 
-	auto it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
+	callback_holder_map_t::iterator it{npc_callbackmap.find(gamehelpers->EntityToReference(pThis))};
 	if(it != npc_callbackmap.cend()) {
 		META_RES res = it->second->SPEvent_Killed(pThis, info_copy, false);
 		switch(res) {
@@ -3262,11 +3323,9 @@ void hook_npc_removed()
 	SH_REMOVE_MANUALHOOK(Event_Killed, pThis, SH_STATIC(hook_npc_killed), false);
 }
 
-void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
+void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname)
 {
-	std::string classname{classname_ptr};
-
-	if(classname == "player"sv) {
+	if(strcmp(classname, "player") == 0) {
 		if(!player_vtable_assgined) {
 			void **vtabl = *(void ***)pEntity;
 
@@ -3278,7 +3337,7 @@ void Sample::OnEntityCreated(CBaseEntity *pEntity, const char *classname_ptr)
 			player_vtable_assgined = true;
 		}
 	} else {
-		npc_type ntype{g_pNextBot->entity_to_npc_type(pEntity, classname)};
+		npc_type ntype{::entity_to_npc_type(pEntity, classname)};
 		if(ntype == npc_custom) {
 			SH_ADD_MANUALHOOK(UpdateOnRemove, pEntity, SH_STATIC(hook_npc_removed), false);
 			SH_ADD_MANUALHOOK(OnTakeDamage, pEntity, SH_STATIC(hook_npc_takedamage), false);
@@ -3295,7 +3354,7 @@ void Sample::SDK_OnAllLoaded()
 #ifdef __HAS_WPNHACK
 	SM_GET_LATE_IFACE(WPNHACK, g_pWpnHack);
 #endif
-#ifdef __HAS_WPNHACK
+#ifdef __HAS_NEXTBOT
 	SM_GET_LATE_IFACE(NEXTBOT, g_pNextBot);
 #endif
 
@@ -3359,7 +3418,7 @@ DETOUR_DECL_MEMBER5(SW_GameStats_WriteKill, void, CTFPlayer*, pKiller, CTFPlayer
 			return;
 		}
 
-		npc_type ntype{g_pNextBot->entity_to_npc_type(pKiller, pKiller->GetClassname())};
+		npc_type ntype{::entity_to_npc_type(pKiller, pKiller->GetClassname())};
 		if(ntype & npc_any) {
 			return;
 		}
@@ -3654,6 +3713,12 @@ bool Sample::SDK_OnLoad(char *error, size_t maxlen, bool late)
 	g_pGameConf->GetOffset("CBaseEntity::Event_KilledOther", &CBaseEntityEvent_KilledOtherOffset);
 	if(CBaseEntityEvent_KilledOtherOffset == -1) {
 		snprintf(error, maxlen, "could not get CBaseEntity::Event_KilledOther offset");
+		return false;
+	}
+
+	g_pGameConf->GetOffset("CBaseEntity::MyNextBotPointer", &CBaseEntityMyNextBotPointer);
+	if(CBaseEntityMyNextBotPointer == -1) {
+		snprintf(error, maxlen, "could not get CBaseEntity::MyNextBotPointer offset");
 		return false;
 	}
 
