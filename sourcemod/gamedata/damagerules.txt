@@ -90,15 +90,15 @@
 		{
 			"CBaseEntity::OnTakeDamage"
 			{
-				"linux" "63"
+				"linux" "65"
 			}
 			"CBaseCombatCharacter::OnTakeDamage_Alive"
 			{
-				"linux" "280"
+				"linux" "283"
 			}
 			"CTFWeaponBase::ApplyOnHitAttributes"
 			{
-				"linux" "419"
+				"linux" "422"
 			}
 			"CGameRules::GetSkillLevel"
 			{
@@ -122,27 +122,27 @@
 			}
 			"CBaseEntity::IsNPC"
 			{
-				"linux" "71"
+				"linux" "73"
 			}
 			"CBaseEntity::MyCombatCharacterPointer"
 			{
-				"linux" "72"
+				"linux" "74"
 			}
 			"CTFWeaponBase::GetWeaponID"
 			{
-				"linux" "382"
+				"linux" "385"
 			}
 			"CBaseCombatCharacter::GetBossType"
 			{
-				"linux" "327"
+				"linux" "330"
 			}
 			"CBaseCombatCharacter::Event_Killed"
 			{
-				"linux" "67"
+				"linux" "69"
 			}
 			"CBaseCombatCharacter::GetDeathActivity"
 			{
-				"linux" "289"
+				"linux" "292"
 			}
 			"CMultiplayRules::DeathNotice"
 			{
@@ -150,55 +150,55 @@
 			}
 			"CBaseEntity::IsPlayer"
 			{
-				"linux" "81"
+				"linux" "83"
 			}
 			"CBaseEntity::Classify"
 			{
-				"linux" "54"
+				"linux" "56"
 			}
 			"CMultiplayRules::GetDeathScorer"
 			{
-				"linux" "142"
+				"linux" "146"
 			}
 			"CBasePlayer::IsBot"
 			{
-				"linux" "452"
+				"linux" "455"
 			}
 			"CBaseAnimating::Ignite"
 			{
-				"linux" "217"
+				"linux" "220"
 			}
 			"NextBotCombatCharacter::Ignite"
 			{
-				"linux" "330"
+				"linux" "333"
 			}
 			"CTFGameRules::DeathNotice"
 			{
-				"linux" "244"
+				"linux" "248"
 			}
 			"CBaseEntity::Event_KilledOther"
 			{
-				"linux" "68"
+				"linux" "70"
 			}
 			"CBaseObject::Killed"
 			{
-				"linux" "353"
+				"linux" "356"
 			}
 			"CBaseCombatCharacter::CheckTraceHullAttack(float)"
 			{
-				"linux" "302"
+				"linux" "305"
 			}
 			"CBaseCombatCharacter::CheckTraceHullAttack(Vector)"
 			{
-				"linux" "303"
+				"linux" "306"
 			}
 			"CBaseEntity::UpdateOnRemove"
 			{
-				"linux" "109"
+				"linux" "111"
 			}
 			"CBaseEntity::MyNextBotPointer"
 			{
-				"linux" "73"
+				"linux" "75"
 			}
 		}
 	}
